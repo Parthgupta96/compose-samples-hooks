@@ -61,7 +61,7 @@ def parse_stability_reports(composables, classes):
     """
     params, current = {}, None
     for line in composables.splitlines():
-        header = re.search(r"\bfun (\w+)\($", line)
+        header = re.search(r"\bfun (?:[\w.]+\.)?(\w+)\($", line)  # Kotlin 2.4+ prefixes the package
         if header:
             current = params.setdefault(header.group(1), [])
         elif line.startswith(")"):
@@ -70,7 +70,11 @@ def parse_stability_reports(composables, classes):
             param = re.match(r"\s+unstable (\w+):", line)
             if param:
                 current.append(param.group(1))
-    unstable = {name for name in re.findall(r"^unstable class ([\w$.]+) \{", classes, re.M) if "$" not in name}
+    unstable = {
+        name.rsplit(".", 1)[-1]
+        for name in re.findall(r"^unstable class ([\w$.]+) \{", classes, re.M)
+        if "$" not in name
+    }
     return params, unstable
 
 

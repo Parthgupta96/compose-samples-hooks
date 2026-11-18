@@ -29,6 +29,9 @@ def self_check():
              "restartable skippable fun Empty()\n"
     classes = "unstable class Model {\n}\nstable class Ok {\n}\nunstable class Model$$serializer {\n}\n"
     assert parse_stability_reports(report, classes) == ({"Card": ["items"]}, {"Model"})
+    qualified = report.replace("fun Card(", "fun com.example.Card(")  # Kotlin 2.4+ report format
+    assert parse_stability_reports(qualified, classes.replace("class Model {", "class com.example.Model {")) \
+        == ({"Card": ["items"]}, {"Model"})
     source = "@Composable\nprivate fun RowScope.Card(\n    items: List<String>,\n) {\n}\ndata class Model(val a: Int)\n"
     assert declarations(source, COMPOSABLE_DECL) == [("Card", 2, 4)]
     assert declarations(source, CLASS_DECL) == [("Model", 6, 6)]
