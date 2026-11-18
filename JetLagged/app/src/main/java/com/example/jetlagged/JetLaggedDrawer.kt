@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
+import com.example.jetlagged.sleep.SleepHistoryScreen
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
 
@@ -119,6 +120,7 @@ fun HomeScreenDrawer(windowSizeClass: WindowSizeClass) {
             selectedScreen = screenState,
             onScreenSelected = { screen ->
                 screenState = screen
+                coroutineScope.launch { closeDrawer() }
             },
         )
 
@@ -213,6 +215,9 @@ private fun ScreenContents(
                 ) {
                 }
 
+            Screen.SleepHistory ->
+                SleepHistoryScreen(onDrawerClicked = onDrawerClicked)
+
             Screen.Leaderboard ->
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -263,6 +268,7 @@ private val DrawerWidth = 300.dp
 private enum class Screen(val text: String, @DrawableRes val icon: Int) {
     Home("Home", R.drawable.ic_home),
     SleepDetails("Sleep", R.drawable.ic_bedtime),
+    SleepHistory("Sleep history", R.drawable.ic_watch),
     Leaderboard("Leaderboard", R.drawable.ic_leaderboard),
     Settings("Settings", R.drawable.ic_settings),
 }
