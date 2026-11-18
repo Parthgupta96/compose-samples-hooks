@@ -39,6 +39,13 @@
     <string name="ave_time_in_bed_heading">AVE TIME IN BED</string>
     <string name="ambiance_heading">Ambiance</string>
     <string name="room_temperature">Room Temperature</string>
+    <string name="sleep_history_heading">Sleep history</string>
+    <string name="sleep_history_filter_all">All</string>
+    <string name="sleep_history_filter_good">Good</string>
+    <string name="sleep_history_filter_poor">Poor</string>
+    <string name="sleep_history_empty">No nights match this filter</string>
+    <string name="sleep_history_duration">%1$dh %2$dm</string>
+    <string name="sleep_history_score">Sleep score %1$d</string>
 
 
 </resources>

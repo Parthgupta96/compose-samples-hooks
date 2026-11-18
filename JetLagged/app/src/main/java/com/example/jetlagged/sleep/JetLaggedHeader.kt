@@ -37,15 +37,18 @@ import androidx.compose.ui.unit.dp
 import com.example.jetlagged.R
 import com.example.jetlagged.ui.theme.TitleBarStyle
 
-@Preview
 @Composable
-fun JetLaggedHeader(modifier: Modifier = Modifier, onDrawerClicked: () -> Unit = {}) {
+fun JetLaggedHeader(
+    modifier: Modifier = Modifier,
+    title: String = stringResource(R.string.jetlagged_app_heading),
+    onDrawerClick: () -> Unit = {},
+) {
     Box(
         modifier.height(150.dp),
     ) {
         Row(modifier = Modifier.windowInsetsPadding(insets = WindowInsets.systemBars)) {
             IconButton(
-                onClick = onDrawerClicked,
+                onClick = onDrawerClick,
             ) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_menu),
@@ -54,7 +57,7 @@ fun JetLaggedHeader(modifier: Modifier = Modifier, onDrawerClicked: () -> Unit =
             }
 
             Text(
-                stringResource(R.string.jetlagged_app_heading),
+                title,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
@@ -63,4 +66,10 @@ fun JetLaggedHeader(modifier: Modifier = Modifier, onDrawerClicked: () -> Unit =
             )
         }
     }
+}
+
+@Preview
+@Composable
+private fun JetLaggedHeaderPreview() {
+    JetLaggedHeader()
 }

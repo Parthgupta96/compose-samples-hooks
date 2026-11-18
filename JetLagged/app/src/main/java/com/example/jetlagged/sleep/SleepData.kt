@@ -16,10 +16,12 @@
 
 package com.example.jetlagged.sleep
 
+import androidx.compose.runtime.Immutable
 import com.example.jetlagged.R
 import java.time.Duration
 import java.time.LocalDateTime
 
+@Immutable
 data class SleepGraphData(val sleepDayData: List<SleepDayData>) {
     val earliestStartHour: Int by lazy {
         sleepDayData.minOf { it.firstSleepStart.hour }
@@ -29,6 +31,7 @@ data class SleepGraphData(val sleepDayData: List<SleepDayData>) {
     }
 }
 
+@Immutable
 data class SleepDayData(val startDate: LocalDateTime, val sleepPeriods: List<SleepPeriod>, val sleepScore: Int) {
     val firstSleepStart: LocalDateTime by lazy {
         sleepPeriods.sortedBy(SleepPeriod::startTime).first().startTime
@@ -38,6 +41,17 @@ data class SleepDayData(val startDate: LocalDateTime, val sleepPeriods: List<Sle
     }
     val totalTimeInBed: Duration by lazy {
         Duration.between(firstSleepStart, lastSleepEnd)
+    }
+
+    val timeInStage: Map<SleepType, Duration> by lazy {
+        SleepType.entries.associateWith { type ->
+            sleepPeriods.filter { it.type == type }.fold(Duration.ZERO) { total, period -> total.plus(period.duration) }
+        }
+    }
+
+    /** Time asleep: every stage except [SleepType.Awake]. */
+    val totalSleep: Duration by lazy {
+        timeInStage.filterKeys { it != SleepType.Awake }.values.fold(Duration.ZERO, Duration::plus)
     }
 
     val sleepScoreEmoji: String by lazy {

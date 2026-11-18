@@ -20,7 +20,9 @@ import com.example.jetlagged.sleep.SleepDayData
 import com.example.jetlagged.sleep.SleepGraphData
 import com.example.jetlagged.sleep.SleepPeriod
 import com.example.jetlagged.sleep.SleepType
+import java.time.LocalDate
 import java.time.LocalDateTime
+import kotlin.random.Random
 
 // In the real world, you should get this data from a backend.
 val sleepData = SleepGraphData(
@@ -645,3 +647,36 @@ val sleepData = SleepGraphData(
         ),
     ),
 )
+
+// About a month of nights, most recent first. Seeded so the list is the same on every launch.
+val sleepHistoryData = SleepGraphData(
+    Random(seed = 30).let { random -> List(30) { generateNight(daysAgo = it + 1L, random = random) } },
+)
+
+private fun generateNight(daysAgo: Long, random: Random): SleepDayData {
+    val bedtime = LocalDate.now().minusDays(daysAgo).atTime(21, 30).plusMinutes(random.nextLong(0, 120))
+    val periods = mutableListOf<SleepPeriod>()
+    var cursor = bedtime
+    fun add(type: SleepType, minutes: Long) {
+        val end = cursor.plusMinutes(minutes)
+        periods += SleepPeriod(startTime = cursor, endTime = end, type = type)
+        cursor = end
+    }
+
+    add(SleepType.Awake, random.nextLong(5, 30))
+    // Roughly 90-minute cycles of light, deep and REM sleep, with the odd wake-up.
+    repeat(random.nextInt(3, 6)) {
+        add(SleepType.Light, random.nextLong(30, 60))
+        add(SleepType.Deep, random.nextLong(15, 45))
+        add(SleepType.REM, random.nextLong(15, 35))
+        if (random.nextInt(4) == 0) add(SleepType.Awake, random.nextLong(5, 25))
+    }
+
+    val night = SleepDayData(bedtime, periods, sleepScore = 0)
+    // 8 hours asleep scores 100; each 3 minutes awake costs a point.
+    val awakeMinutes = night.timeInStage.getValue(SleepType.Awake).toMinutes()
+    val score = night.totalSleep.toMinutes() * 100 / FULL_NIGHT_MINUTES - awakeMinutes / 3
+    return night.copy(sleepScore = score.toInt().coerceIn(0, 100))
+}
+
+private const val FULL_NIGHT_MINUTES = 8 * 60

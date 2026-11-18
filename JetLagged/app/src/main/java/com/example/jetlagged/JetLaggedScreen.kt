@@ -71,7 +71,7 @@ fun JetLaggedScreen(
         ) {
             JetLaggedHeader(
                 modifier = Modifier.fillMaxWidth(),
-                onDrawerClicked = onDrawerClicked,
+                onDrawerClick = onDrawerClicked,
             )
         }
 
