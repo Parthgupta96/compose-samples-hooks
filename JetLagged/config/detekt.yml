@@ -1,0 +1,28 @@
+# Applied on top of the detekt default config by scripts/agent_eval.py.
+# Style, naming and formatting belong to ktlint (config/ktlint.editorconfig).
+comments:
+  active: false
+complexity:
+  active: false
+naming:
+  active: false
+style:
+  active: false
+
+coroutines:
+  GlobalCoroutineUsage:
+    active: true
+
+empty-blocks:
+  EmptyFunctionBlock:
+    ignoreOverridden: true
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false
+  TooGenericExceptionThrown:
+    active: false
+
+performance:
+  SpreadOperator:
+    active: false

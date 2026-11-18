@@ -1,0 +1,5 @@
+{
+  "package": "com.example.app",
+  "build_task": ":app:assembleDebug",
+  "screens": {}
+}

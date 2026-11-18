@@ -43,3 +43,14 @@ subprojects {
         }
     }
 }
+
+subprojects {
+    plugins.withId("org.jetbrains.kotlin.plugin.compose") {
+        if (project.hasProperty("enableComposeReports")) {
+            extensions.configure<org.jetbrains.kotlin.compose.compiler.gradle.ComposeCompilerGradlePluginExtension> {
+                reportsDestination.set(layout.buildDirectory.dir("compose_compiler"))
+                metricsDestination.set(layout.buildDirectory.dir("compose_compiler"))
+            }
+        }
+    }
+}
