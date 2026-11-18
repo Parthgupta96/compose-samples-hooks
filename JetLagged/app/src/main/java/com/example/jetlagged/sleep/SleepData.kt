@@ -50,6 +50,14 @@ data class SleepDayData(val startDate: LocalDateTime, val sleepPeriods: List<Sle
         }
     }
 
+    val totalTimeAsleep: Duration by lazy {
+        SleepType.entries.filter { it != SleepType.Awake }.fold(Duration.ZERO) { total, type -> total.plus(timeIn(type)) }
+    }
+
+    fun timeIn(type: SleepType): Duration = sleepPeriods
+        .filter { it.type == type }
+        .fold(Duration.ZERO) { total, period -> total.plus(period.duration) }
+
     fun fractionOfTotalTime(sleepPeriod: SleepPeriod): Float {
         return sleepPeriod.duration.toMinutes() / totalTimeInBed.toMinutes().toFloat()
     }

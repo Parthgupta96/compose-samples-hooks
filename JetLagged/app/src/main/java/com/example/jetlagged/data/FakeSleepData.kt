@@ -20,7 +20,9 @@ import com.example.jetlagged.sleep.SleepDayData
 import com.example.jetlagged.sleep.SleepGraphData
 import com.example.jetlagged.sleep.SleepPeriod
 import com.example.jetlagged.sleep.SleepType
+import java.time.LocalDate
 import java.time.LocalDateTime
+import kotlin.random.Random
 
 // In the real world, you should get this data from a backend.
 val sleepData = SleepGraphData(
@@ -645,3 +647,31 @@ val sleepData = SleepGraphData(
         ),
     ),
 )
+
+// About a month of nights for the sleep history screen, most recent first.
+// A fixed seed keeps the list stable between launches.
+val sleepHistoryData: List<SleepDayData> = generateSleepHistory(nights = 30, random = Random(seed = 7))
+
+private fun generateSleepHistory(nights: Int, random: Random): List<SleepDayData> {
+    val today = LocalDate.now()
+    return (1..nights).map { daysAgo ->
+        val bedtime = today.minusDays(daysAgo.toLong()).atTime(21, 30).plusMinutes(random.nextLong(0, 120))
+        val periods = mutableListOf<SleepPeriod>()
+        fun add(type: SleepType, minutes: Long) {
+            val start = periods.lastOrNull()?.endTime ?: bedtime
+            periods += SleepPeriod(start, start.plusMinutes(minutes), type)
+        }
+        add(SleepType.Awake, random.nextLong(5, 30))
+        // Four to six sleep cycles of roughly 45 to 120 minutes each, sometimes broken by waking up.
+        repeat(random.nextInt(4, 7)) {
+            add(SleepType.Light, random.nextLong(25, 50))
+            add(SleepType.Deep, random.nextLong(10, 40))
+            add(SleepType.REM, random.nextLong(10, 30))
+            if (random.nextInt(4) == 0) add(SleepType.Awake, random.nextLong(5, 25))
+        }
+        val minutesAsleep = periods.filter { it.type != SleepType.Awake }.sumOf { it.duration.toMinutes() }
+        // Longer nights score higher, with some noise so the score is not just a function of duration.
+        val score = (minutesAsleep / 480.0 * 85 + random.nextInt(-8, 9)).toInt().coerceIn(20, 99)
+        SleepDayData(bedtime, periods, score)
+    }
+}
