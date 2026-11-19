@@ -52,9 +52,19 @@
     <string name="interests_section_people">People</string>
     <string name="interests_section_publications">Publications</string>
 
+    <!-- Reading History Screen -->
+    <string name="reading_history_title">Reading history</string>
+    <string name="reading_history_filter_all">All</string>
+    <string name="reading_history_filter_finished">Finished</string>
+    <string name="reading_history_filter_in_progress">In progress</string>
+    <string name="reading_history_minutes_spent">%1$d min</string>
+    <string name="reading_history_percent_read">%1$d%%</string>
+    <string name="reading_history_empty">No articles match this filter</string>
+
     <!-- Navigation actions -->
     <string name="cd_navigate_up">Navigate up</string>
     <string name="cd_navigate_home">Navigate to the home screen</string>
     <string name="cd_navigate_interests">Navigate to the interests screen</string>
+    <string name="cd_navigate_reading_history">Navigate to the reading history screen</string>
 
 </resources>

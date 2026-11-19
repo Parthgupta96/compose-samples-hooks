@@ -17,9 +17,11 @@
 package com.example.jetnews
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -27,6 +29,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.jetnews.data.posts.impl.manuel
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -68,5 +72,27 @@ class JetnewsTests {
         ).performClick()
         composeTestRule.onNodeWithText("Interests").performClick()
         composeTestRule.waitUntilAtLeastOneExists(hasText("Topics"), 5000L)
+    }
+
+    @Test
+    fun app_opensReadingHistory_andFilters() {
+        composeTestRule.onNodeWithContentDescription(
+            label = "Open navigation drawer",
+            useUnmergedTree = true,
+        ).performClick()
+        composeTestRule.onNodeWithText("Reading history").performClick()
+        composeTestRule.waitUntilAtLeastOneExists(hasText("In progress"), 5000L)
+
+        composeTestRule.onNodeWithText("Finished").performClick()
+        composeTestRule.onAllNodes(hasText("%", substring = true)).fetchSemanticsNodes().forEach {
+            assertEquals("100%", it.config[SemanticsProperties.Text].single().text)
+        }
+
+        composeTestRule.onNodeWithText("In progress").performClick()
+        composeTestRule.onAllNodes(hasText("%", substring = true)).fetchSemanticsNodes().forEach {
+            assertNotEquals("100%", it.config[SemanticsProperties.Text].single().text)
+        }
+        // 99% is the boundary that must stay "In progress".
+        composeTestRule.onAllNodes(hasText("99%")).onFirst().assertExists()
     }
 }
