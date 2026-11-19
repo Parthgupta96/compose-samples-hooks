@@ -444,7 +444,7 @@ def frame_verdict(label, runs, limits):
         limits: {"max_janky_percent": float or None, "max_p95_ms": float or None}.
 
     Returns:
-        (summary line, failure lines).
+        (summary line, failure lines); the summary is None when no run has frame stats.
     """
     def spread(key):
         values = [run[key] for run in runs if key in run]
@@ -454,17 +454,17 @@ def frame_verdict(label, runs, limits):
 
     janky, janky_range = spread("janky_percent")
     p95, p95_range = spread("p95")
-    others = {key: spread(key)[0] for key in ("p50", "p90", "p99", "frames")}
-    summary = (f"frames on {label}: janky {janky}% ({janky_range}), p50 {others['p50']}ms, p90 {others['p90']}ms, "
-               f"p95 {p95}ms ({p95_range}), p99 {others['p99']}ms, {others['frames']} frames; median of {len(runs)} runs")
-    failures = []
     if janky is None or p95 is None:
-        failures.append(f"Inconclusive: gfxinfo returned no frame stats for {label}.")
-    else:
-        if limits.get("max_janky_percent") is not None and janky > limits["max_janky_percent"]:
-            failures.append(f"{label}: {janky}% janky frames (max {limits['max_janky_percent']}%).")
-        if limits.get("max_p95_ms") is not None and p95 > limits["max_p95_ms"]:
-            failures.append(f"{label}: p95 frame time {p95}ms (max {limits['max_p95_ms']}ms).")
+        return None, [f"Inconclusive: gfxinfo returned no frame stats for {label}."]
+    others = {key: spread(key)[0] for key in ("p50", "p90", "p99", "frames")}
+    measured = sum("p95" in run for run in runs)
+    summary = (f"frames on {label}: janky {janky}% ({janky_range}), p50 {others['p50']}ms, p90 {others['p90']}ms, "
+               f"p95 {p95}ms ({p95_range}), p99 {others['p99']}ms, {others['frames']} frames; median of {measured} runs")
+    failures = []
+    if limits.get("max_janky_percent") is not None and janky > limits["max_janky_percent"]:
+        failures.append(f"{label}: {janky}% janky frames (max {limits['max_janky_percent']}%).")
+    if limits.get("max_p95_ms") is not None and p95 > limits["max_p95_ms"]:
+        failures.append(f"{label}: p95 frame time {p95}ms (max {limits['max_p95_ms']}ms).")
     return summary, failures
 
 
@@ -579,6 +579,7 @@ def check_frames(ctx):
         if runs:
             limits = {key: entry.get(key, screen_map.get(key)) for key in ("max_janky_percent", "max_p95_ms")}
             summary, failures = frame_verdict(label, runs, limits)
-            info(summary)
+            if summary:
+                info(summary)
             errors += failures
     return errors

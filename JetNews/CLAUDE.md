@@ -1,0 +1,3 @@
+- Tag the root of each new list row and each new screen root with `Modifier.recomposeHighlighter("<Name>")` from `com.example.jetnews.utils`.
+- Map each tag in `config/recomposition_screens.json` under `screens`, opening the screen by its deep link: `"<Name>": {"deeplink": "https://developer.android.com/jetnews/..."}`.
+- The Stop hook installs the app on the connected device, swipes each tagged screen, and blocks when a tag recomposes more than 2 times in one swipe or frames are too slow.

@@ -81,7 +81,7 @@ def self_check():
     assert frame_verdict("S", runs, {"max_janky_percent": None, "max_p95_ms": None})[1] == []
     assert frame_verdict("S", runs, {"max_janky_percent": 4, "max_p95_ms": 17})[1] == \
         ["S: 5.0% janky frames (max 4%).", "S: p95 frame time 18ms (max 17ms)."]
-    assert frame_verdict("S", [{}], {})[1][0].startswith("Inconclusive")
+    assert frame_verdict("S", [{}], {})[0] is None and frame_verdict("S", [{}], {})[1][0].startswith("Inconclusive")
 
     apks = ["app/build/outputs/apk/debug/app-debug.apk", "app/build/outputs/apk/benchmark/app-benchmark.apk",
             "app/build/outputs/apk/free/debug/app-free-debug.apk"]

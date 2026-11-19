@@ -35,3 +35,5 @@
 -dontwarn org.openjsse.net.ssl.OpenJSSE
 
 -keep class androidx.compose.ui.platform.AndroidCompositionLocals_androidKt { *; }
+# WorkManager creates its Room database by reflection; without this R8 breaks it and the app crashes at startup.
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
