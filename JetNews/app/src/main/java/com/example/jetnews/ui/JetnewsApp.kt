@@ -35,6 +35,7 @@ import com.example.jetnews.ui.navigation.NAVIGATION_ITEMS
 import com.example.jetnews.ui.navigation.Navigator
 import com.example.jetnews.ui.navigation.PopUpTo
 import com.example.jetnews.ui.navigation.rememberNavigationState
+import com.example.jetnews.ui.readinghistory.ReadingHistoryKey
 import com.example.jetnews.ui.theme.JetnewsTheme
 import kotlinx.coroutines.launch
 
@@ -43,7 +44,7 @@ fun JetnewsApp(appContainer: AppContainer, isBackEnabled: Boolean, initialBackSt
 
     val navigationState = rememberNavigationState(
         primaryTopLevelKey = HomeKey,
-        topLevelKeys = setOf(HomeKey, InterestsKey),
+        topLevelKeys = setOf(HomeKey, InterestsKey, ReadingHistoryKey),
         initialBackStack = initialBackStack,
     )
 
