@@ -44,6 +44,7 @@ import com.example.jetnews.ui.navigation.PopUpTo
 import com.example.jetnews.ui.navigation.rememberListDetailSceneStrategy
 import com.example.jetnews.ui.post.PostKey
 import com.example.jetnews.ui.post.postEntry
+import com.example.jetnews.ui.readinghistory.readingHistoryEntry
 
 const val PIVOT_FRACTION_OFFSET = .2f
 
@@ -77,6 +78,10 @@ fun JetnewsNavDisplay(
         )
         interestsEntry(
             interestsRepository = appContainer.interestsRepository,
+            isExpandedScreen = { currentIsExpandedScreen },
+            openDrawer = openDrawer,
+        )
+        readingHistoryEntry(
             isExpandedScreen = { currentIsExpandedScreen },
             openDrawer = openDrawer,
         )

@@ -5,5 +5,12 @@
   "gesture_repeats": 5,
   "frame_runs": 1,
   "max_p95_ms": 40,
-  "screens": {}
+  "screens": {
+    "ReadingHistory": {
+      "deeplink": "https://developer.android.com/jetnews/reading-history"
+    },
+    "ReadingHistoryRow": {
+      "deeplink": "https://developer.android.com/jetnews/reading-history"
+    }
+  }
 }
