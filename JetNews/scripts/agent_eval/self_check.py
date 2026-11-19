@@ -1,11 +1,14 @@
 """Assertions for the parsers and path rules. Run with `python3 scripts/agent_eval.py --self-check`."""
+import os
+import tempfile
+
 from .common import ROOT, module_of, parse_hunks, parse_includes
 from .checks import blocking
 from .device import (find_node, frame_verdict, gesture_command, gesture_moved, launch_command, parse_attached,
                      parse_gfxinfo, parse_recomposition_counts, ui_signature, variant_apks)
 from .hooks import GUARDED_PATHS
 from .lint import sarif_path
-from .stability import CLASS_DECL, COMPOSABLE_DECL, declarations, parse_stability_reports
+from .stability import CLASS_DECL, COMPOSABLE_DECL, declarations, parse_stability_reports, report_files
 
 
 def self_check():
@@ -35,6 +38,15 @@ def self_check():
     qualified = report.replace("fun Card(", "fun com.example.Card(")  # Kotlin 2.4+ report format
     assert parse_stability_reports(qualified, classes.replace("class Model {", "class com.example.Model {")) \
         == ({"Card": ["items"]}, {"Model"})
+    with tempfile.TemporaryDirectory() as reports:
+        assert report_files(reports) is None  # no report: the check says Inconclusive, not pass
+        old, new = os.path.join(reports, "app-debug-composables.txt"), os.path.join(reports, "app-composables.txt")
+        for path, mtime in ((old, 1), (new, 2)):
+            open(path, "w").close()
+            os.utime(path, (mtime, mtime))
+        assert report_files(reports) == (new, os.path.join(reports, "app-classes.txt"))
+        assert report_files(reports, "debug") == (old, os.path.join(reports, "app-debug-classes.txt"))
+    assert parse_stability_reports("fun Card(\n  items: List<String>\n)\n", "") == ({"Card": []}, set())
     source = "@Composable\nprivate fun RowScope.Card(\n    items: List<String>,\n) {\n}\ndata class Model(val a: Int)\n"
     assert declarations(source, COMPOSABLE_DECL) == [("Card", 2, 4)]
     assert declarations(source, CLASS_DECL) == [("Model", 6, 6)]

@@ -1,8 +1,8 @@
 """Compose compiler stability reports: unstable parameters of edited composables and unstable UI models.
 
 The reports live in <module>/build/compose_compiler and are written by a compile with
--PenableComposeReports (see the reports block in SETUP.md). report_variant in config/agent_eval.json
-picks the report files.
+-PenableComposeReports (see the reports block in SETUP.md). The newest report is used, so file names
+with or without a variant both work; report_variant in config/agent_eval.json can force one.
 """
 import glob
 import os
@@ -67,6 +67,8 @@ def parse_stability_reports(composables, classes):
         elif line.startswith(")"):
             current = None
         elif current is not None:
+            # Only the "unstable" label counts. An unlabeled parameter has runtime stability, which the
+            # Compose docs do not treat as a problem under strong skipping (compared with ===).
             param = re.match(r"\s+unstable (\w+):", line)
             if param:
                 current.append(param.group(1))
@@ -78,19 +80,38 @@ def parse_stability_reports(composables, classes):
     return params, unstable
 
 
+def report_files(report_dir, variant=""):
+    """Picks the composables report and its classes report in one folder.
+
+    Kotlin 2.4+ writes app-composables.txt and older versions app-debug-composables.txt, so the newest
+    *-composables.txt is used: the compile that just ran wrote it.
+
+    Args:
+        report_dir: the module's build/compose_compiler folder.
+        variant: optional; only files ending in <variant>-composables.txt count.
+
+    Returns:
+        (composables path, classes path), or None when there is no report.
+    """
+    found = glob.glob(os.path.join(report_dir, f"*{variant}-composables.txt"))
+    if not found:
+        return None
+    composables = max(found, key=os.path.getmtime)
+    return composables, composables[: -len("composables.txt")] + "classes.txt"
+
+
 def stability_reports(module):
-    """Loads the stability reports of one module for the configured report_variant.
+    """Loads the stability reports of one module.
 
     Args:
         module: module path, for example "feature:impl".
 
     Returns:
-        The parse_stability_reports result; empty when the module has no reports.
+        The parse_stability_reports result, or None when the module has no report.
     """
-    variant = load_settings()["report_variant"]
     report_dir = os.path.join(ROOT, module.replace(":", "/"), "build", "compose_compiler")
-    read = lambda kind: "".join(read_text(p) for p in glob.glob(os.path.join(report_dir, f"*{variant}-{kind}.txt")))
-    return parse_stability_reports(read("composables"), read("classes"))
+    files = report_files(report_dir, load_settings()["report_variant"])
+    return parse_stability_reports(*(read_text(f) for f in files)) if files else None
 
 
 def check_compose_stability(ctx):
@@ -107,13 +128,17 @@ def check_compose_stability(ctx):
     """
     # ponytail: an incremental compile reports only the files it recompiled, so a declaration that is
     # absent from the reports is skipped, not failed. Run a clean compile with reports to cover it.
-    modules, reports, findings = gradle_modules(), {}, []
+    modules, reports, findings, inconclusive = gradle_modules(), {}, [], []
     for rel, lines in kotlin_scope(ctx.files).items():
         module = module_of(rel, modules)
         if not rel.endswith(".kt") or lines == set() or not module:
             continue
         if module not in reports:
             reports[module] = stability_reports(module)
+            if reports[module] is None:
+                inconclusive.append(f"Inconclusive: no Compose report for {module}; nothing was checked. "
+                                    "Compile with -PenableComposeReports (see SETUP.md).")
+                reports[module] = ({}, set())
         params, unstable_classes = reports[module]
         text = read_text(os.path.join(ROOT, rel))
         touched = lambda first, last: lines is None or any(first <= n <= last for n in lines)
@@ -124,4 +149,4 @@ def check_compose_stability(ctx):
             for name, first, last in declarations(text, CLASS_DECL):
                 if touched(first, last) and name in unstable_classes:
                     findings.append(f"{rel}:{first} class {name} is unstable")
-    return findings + [STABILITY_FIX] if findings else []
+    return (findings + [STABILITY_FIX] if findings else []) + inconclusive

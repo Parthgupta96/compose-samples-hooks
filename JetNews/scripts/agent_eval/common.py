@@ -11,7 +11,7 @@ KOTLIN_SUFFIXES = (".kt", ".kts")
 MAX_REPORTED_LINES = 40
 DEFAULT_SETTINGS = {
     "compile_task": "compileDebugKotlin",
-    "report_variant": "debug",
+    "report_variant": "",
     "skip_compile_modules": [],
     "device_in_stop": False,
 }

@@ -23,7 +23,7 @@ CHECKS = [
 
 
 def blocking(lines):
-    """Drops the "Inconclusive" lines, so a missing device or tag never blocks a Stop."""
+    """Drops the "Inconclusive" lines, so a missing device, tag or report never blocks a Stop."""
     return [line for line in lines if not line.startswith("Inconclusive")]
 
 
@@ -34,11 +34,11 @@ def check_device_in_stop(ctx):
         ctx: check context.
 
     Returns:
-        Failure lines without the "Inconclusive" ones; empty when device_in_stop is off.
+        Failure lines; empty when device_in_stop is off. run_checks drops the "Inconclusive" ones.
     """
     if not load_settings()["device_in_stop"]:
         return []
-    return blocking(check_recomposition(ctx) + check_frames(ctx))
+    return check_recomposition(ctx) + check_frames(ctx)
 
 
 # Last, so a Stop compiles and lints before it spends time on the device.
@@ -62,6 +62,8 @@ def run_checks(stage, files, device="", skip_install=False):
     for check, stages in CHECKS:
         if stage in stages:
             errors = check(ctx)
+            if stage == "stop":
+                errors = blocking(errors)
             if errors:
                 failures.append(f"[{check.__name__}]\n" + "\n".join(f"  {e}" for e in errors))
     return failures
