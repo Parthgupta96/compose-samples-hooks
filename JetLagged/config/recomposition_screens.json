@@ -1,5 +1,8 @@
 {
-  "package": "com.example.app",
+  "package": "com.example.jetlagged",
   "build_task": ":app:assembleDebug",
+  "gfx_build_task": ":app:assembleBenchmark",
+  "gesture_repeats": 5,
+  "frame_runs": 3,
   "screens": {}
 }

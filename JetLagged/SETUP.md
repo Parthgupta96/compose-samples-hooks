@@ -47,6 +47,7 @@ This downloads pinned ktlint 1.8.0, compose-rules 0.6.8 and detekt 1.23.8 (about
 | `compile_task` | Kotlin compile task name, run per module | `compileDebugKotlin`, or `compileFreeDebugKotlin` with flavors |
 | `report_variant` | Variant part of the Compose report file names | `debug`, or `freeDebug` |
 | `skip_compile_modules` | Modules that do not have `compile_task` | `["lint-rules"]` |
+| `device_in_stop` | Also run the device checks (section 6) in the Stop hook | `false` (default), `true` |
 
 Find the task names with `./gradlew :app:tasks --all | grep -E '^compile.*Kotlin'`.
 
@@ -102,17 +103,47 @@ python3 scripts/agent_eval.py
 
 The second command runs the Stop checks on the git working tree.
 
-## 6. Device recomposition check (optional)
+## 6. Device checks (optional)
 
-The check reads logcat lines with the tag `RecomposeTracker`:
+`python3 scripts/agent_eval.py --stage device` installs the app, opens each tagged screen and swipes it. It runs two
+checks:
+
+- **Recomposition:** the highest `count=` per tag during one swipe must be 2 or less.
+- **Frames:** `dumpsys gfxinfo` after `gesture_repeats` swipes, `frame_runs` times. It prints the median janky % and
+  the p50/p90/p95/p99 frame times. It fails only when `max_janky_percent` or `max_p95_ms` is set and the median is
+  above it.
+
+The recomposition check reads logcat lines with the tag `RecomposeTracker`:
 
 - `Composable <Tag> attached` when a tagged node first appears;
 - `Composable <Tag> count=<n>` on each recomposition, with the count reset after about 3 s idle.
 
 Add a debug-only `Modifier.recomposeHighlighter(tag)` that logs these lines. Google's public
 recompose-highlighter snippet is a good base: log `attached` in `onAttach()` and `count=` where it
-increments its counter. Then map each tag to a screen in `config/recomposition_screens.json`
-(`package`, `build_task`, and per tag a `deeplink` and a `gesture`).
+increments its counter.
+
+Tag the root of each new list row, and each screen root, with `Modifier.recomposeHighlighter("<Name>")`. Then map each
+tag in `config/recomposition_screens.json`. A screen opens in one of three ways:
+
+| Entry | Opens | Notes |
+|---|---|---|
+| `"deeplink": "https://…"` | the full page by deep link | Best when the app has deep links |
+| `"steps": [{"tap_desc": "…"}, {"tap_text": "…"}]` | the full page: launches the app, then taps each node found by content description or text | Breaks when the UI text changes |
+| `"preview": "com.example.FooKt.FooPreview"` | the `@Preview` through ui-tooling's `PreviewActivity` | Debug builds only; no app scaffold, drawer or real insets |
+
+Each entry can also set `gesture` (`swipe_up` by default, `swipe_down` or `none`) and its own `max_janky_percent` or
+`max_p95_ms`. The top-level keys are:
+
+- `package` and `build_task`, which must name the same debug variant;
+- `gfx_build_task`, which is optional, for example a non-debuggable `:app:assembleBenchmark`. Frames are then measured
+  on that build, which cannot open a preview;
+- `gesture_repeats`, `frame_runs`, and global limits.
+
+Debug builds have slow frame times, so measure frames on a non-debuggable build when one exists.
+
+With `device_in_stop: true`, the Stop hook runs both checks after the other checks. A missing device, tag or map
+entry never blocks; only a count or frame time over its limit does. Each Stop with a tagged file then builds and
+installs the app, and that adds about a minute or more.
 
 ## Day-to-day
 
