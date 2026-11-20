@@ -22,10 +22,13 @@ import android.content.res.Configuration.UI_MODE_NIGHT_YES
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -55,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -79,6 +83,7 @@ import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.PostsRepository
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.data.posts.impl.post3
+import com.example.jetnews.data.posts.impl.post5
 import com.example.jetnews.deeplink.util.DeepLinkPattern
 import com.example.jetnews.model.Post
 import com.example.jetnews.ui.home.HomeKey
@@ -89,9 +94,11 @@ import com.example.jetnews.ui.utils.BookmarkButton
 import com.example.jetnews.ui.utils.FavoriteButton
 import com.example.jetnews.ui.utils.ShareButton
 import com.example.jetnews.ui.utils.TextSettingsButton
+import com.example.jetnews.utils.recomposeHighlighter
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 
@@ -208,7 +215,7 @@ fun PostScreen(
     }
 
     val context = LocalContext.current
-    Box(modifier) {
+    Box(modifier.recomposeHighlighter("PostScreen")) {
         PostScreenContent(
             post = post,
             // Allow opening the Drawer if the screen is not expanded
@@ -279,17 +286,42 @@ private fun PostScreenContent(
 ) {
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
+    val coroutineScope = rememberCoroutineScope()
     Scaffold(
         topBar = {
-            if (showTopAppBar) {
-                TopAppBar(
-                    title = post.publication?.name.orEmpty(),
-                    navigationIconContent = navigationIconContent,
-                    scrollBehavior = scrollBehavior,
+            Column {
+                if (showTopAppBar) {
+                    TopAppBar(
+                        title = post.publication?.name.orEmpty(),
+                        navigationIconContent = navigationIconContent,
+                        scrollBehavior = scrollBehavior,
+                    )
+                }
+                ReadingProgress(
+                    state = lazyListState,
+                    readTimeMinutes = post.metadata.readTimeMinutes,
+                    // Without the top app bar nothing else keeps the bar out of the status bar.
+                    modifier = if (showTopAppBar) {
+                        Modifier
+                    } else {
+                        Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    },
                 )
             }
         },
         bottomBar = bottomBarContent,
+        floatingActionButton = {
+            BackToTopButton(
+                state = lazyListState,
+                onClick = {
+                    coroutineScope.launch {
+                        // animateScrollToItem bypasses nested scroll, so bring the app bar back by hand.
+                        scrollBehavior.state.heightOffset = 0f
+                        lazyListState.animateScrollToItem(0)
+                    }
+                },
+            )
+        },
     ) { innerPadding ->
         PostContent(
             post = post,
@@ -428,5 +460,18 @@ fun PreviewPostNavRail() {
             (BlockingFakePostsRepository().getPost(post3.id) as Result.Success).data
         }
         PostScreen(post, true, {}, false, {})
+    }
+}
+
+@Preview("Post screen reading progress")
+@Preview("Post screen reading progress (dark)", uiMode = UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewPostReadingProgress() {
+    JetnewsTheme {
+        val post = runBlocking {
+            (BlockingFakePostsRepository().getPost(post5.id) as Result.Success).data
+        }
+        // Scrolled into the article so the "Back to top" button shows.
+        PostScreen(post, false, {}, false, {}, lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = 12))
     }
 }

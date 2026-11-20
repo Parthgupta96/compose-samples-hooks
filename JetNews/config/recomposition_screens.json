@@ -5,5 +5,7 @@
   "gesture_repeats": 5,
   "frame_runs": 1,
   "max_p95_ms": 40,
-  "screens": {}
+  "screens": {
+    "PostScreen": {"deeplink": "https://developer.android.com/jetnews/posts/55db18283aca"}
+  }
 }
