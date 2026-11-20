@@ -1,9 +1,5 @@
 {
-  "package": "com.example.jetnews",
+  "package": "com.example.app",
   "build_task": ":app:assembleDebug",
-  "gfx_build_task": ":app:assembleRelease",
-  "gesture_repeats": 5,
-  "frame_runs": 1,
-  "max_p95_ms": 40,
   "screens": {}
 }
