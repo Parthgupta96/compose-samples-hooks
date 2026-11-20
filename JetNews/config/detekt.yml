@@ -1,13 +1,57 @@
-# Applied on top of the detekt default config by scripts/agent_eval.py.
-# Style, naming and formatting belong to ktlint (config/ktlint.editorconfig).
+# Applied on top of the detekt default config by scripts/agent_eval.py, on new files and changed lines only.
+# Formatting and naming belong to ktlint (config/ktlint.editorconfig plus the project's .editorconfig).
+# Tuned on JetNews: on the whole existing app this config reports 4 findings, all real; on the three
+# Reading history arms it reports none.
 comments:
   active: false
 complexity:
-  active: false
+  active: false # Composables are long and branchy by nature; these rules mostly add noise for agents.
 naming:
   active: false
+
 style:
-  active: false
+  active: true # Kept for dead code and idioms; the noisy or formatting-only rules are off below.
+  UnusedImports:
+    active: true # ktlint checks imports in new files only; this covers imports added to old files.
+  UnusedPrivateMember:
+    active: true
+    ignoreAnnotated: ['Preview', 'PreviewLightDark', 'PreviewFontScale', 'PreviewScreenSizes', 'PreviewDynamicColors']
+  UnusedParameter:
+    active: true
+  UnusedPrivateProperty:
+    active: true
+  UnusedPrivateClass:
+    active: true
+  UseCheckOrError:
+    active: true
+  UseRequire:
+    active: true
+  MagicNumber:
+    active: false # dp, sp, alpha and animation values are everywhere in UI code.
+  MaxLineLength:
+    active: false # ktlint owns line length.
+  NewLineAtEndOfFile:
+    active: false
+  WildcardImport:
+    active: false
+  ForbiddenComment:
+    active: false
+  ReturnCount:
+    active: false
+  ThrowsCount:
+    active: false
+  LoopWithTooManyJumpStatements:
+    active: false
+  FunctionOnlyReturningConstant:
+    active: false
+  DestructuringDeclarationWithTooManyEntries:
+    active: false
+  UnnecessaryAbstractClass:
+    active: false
+  UtilityClassWithPublicConstructor:
+    active: false
+  SerialVersionUIDInSerializableClass:
+    active: false
 
 coroutines:
   GlobalCoroutineUsage:

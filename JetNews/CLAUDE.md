@@ -1,3 +1,5 @@
 - Tag the root of each new list row and each new screen root with `Modifier.recomposeHighlighter("<Name>")` from `com.example.jetnews.utils`.
 - Map each tag in `config/recomposition_screens.json` under `screens`, opening the screen by its deep link: `"<Name>": {"deeplink": "https://developer.android.com/jetnews/..."}`.
 - The Stop hook installs the app on the connected device, swipes each tagged screen, and blocks when a tag recomposes more than 2 times in one swipe or frames are too slow.
+- The Stop hook also blocks on a crash, an ANR, or a StrictMode violation (such as disk or network access on the main thread) raised from a file you edited.
+- When a feature adds or changes a screen, ask the user before you finish whether to run the release smoke test: `python3 scripts/agent_eval.py --stage release`. It builds the R8 release build, installs it on the phone, and opens the screens you tagged to catch release-only crashes; it takes a few minutes. Do not run it without a yes.

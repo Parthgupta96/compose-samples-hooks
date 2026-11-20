@@ -109,9 +109,40 @@ def stability_reports(module):
     Returns:
         The parse_stability_reports result, or None when the module has no report.
     """
-    report_dir = os.path.join(ROOT, module.replace(":", "/"), "build", "compose_compiler")
-    files = report_files(report_dir, load_settings()["report_variant"])
+    files = module_report(module)
     return parse_stability_reports(*(read_text(f) for f in files)) if files else None
+
+
+def module_report(module):
+    """Finds a module's newest Compose report.
+
+    Args:
+        module: Gradle module path, for example "app".
+
+    Returns:
+        (composables report, classes report) paths, or None when the module has no report.
+    """
+    report_dir = os.path.join(ROOT, module.replace(":", "/"), "build", "compose_compiler")
+    return report_files(report_dir, load_settings()["report_variant"])
+
+
+def report_is_stale(report, sources):
+    """Tells whether a Compose report predates the sources it should describe.
+
+    A compile that Gradle skips as up to date writes no report, so an agent's own build without
+    -PenableComposeReports leaves the previous report in place.
+
+    Args:
+        report: path of the composables report, or None.
+        sources: absolute paths of edited Kotlin files.
+
+    Returns:
+        True when the report is missing or older than the newest existing source.
+    """
+    if not report or not os.path.exists(report):
+        return True
+    newest = max((os.path.getmtime(s) for s in sources if os.path.exists(s)), default=0)
+    return os.path.getmtime(report) < newest
 
 
 def check_compose_stability(ctx):
@@ -139,6 +170,11 @@ def check_compose_stability(ctx):
                 inconclusive.append(f"Inconclusive: no Compose report for {module}; nothing was checked. "
                                     "Compile with -PenableComposeReports (see SETUP.md).")
                 reports[module] = ({}, set())
+            else:
+                sources = [os.path.join(ROOT, f) for f in ctx.files if module_of(f, modules) == module]
+                if report_is_stale(module_report(module)[0], sources):
+                    inconclusive.append(f"Inconclusive: the Compose report for {module} is older than the edited "
+                                        "files, so it may not cover them.")
         params, unstable_classes = reports[module]
         text = read_text(os.path.join(ROOT, rel))
         touched = lambda first, last: lines is None or any(first <= n <= last for n in lines)

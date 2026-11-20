@@ -1,7 +1,12 @@
 # Passed to ktlint with --editorconfig by scripts/agent_eval.py. Android Studio does not read this file.
+# These are defaults only: a project .editorconfig on the file's path overrides every key it sets, so the
+# hook formats and checks in the project's own style. Keep only keys the project file lacks.
 root = true
 
 [*.{kt,kts}]
 ktlint_code_style = android_studio
 max_line_length = 120
 ktlint_function_naming_ignore_when_annotated_with = Composable
+
+# Compose rules (compose-rules 0.6.8). JetNews is Material 3 only, so a Material 2 import is a mistake.
+compose_disallow_material2 = true

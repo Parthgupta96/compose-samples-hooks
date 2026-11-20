@@ -40,7 +40,8 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-from .common import ROOT, read_text
+from .common import NO_SDK, ROOT, gradle_env, read_text
+from .health import app_problems, clear_logs, health_logs
 
 SCREEN_MAP = os.path.join(ROOT, "config", "recomposition_screens.json")
 TRACKER_TAG = "RecomposeTracker"
@@ -333,8 +334,11 @@ def install_build(adb, build_task):
     Returns:
         Failure lines, or an empty list on success.
     """
+    env = gradle_env()
+    if env is None:
+        return [NO_SDK]
     try:
-        result = subprocess.run(["./gradlew", build_task, "--daemon", "-q"], cwd=ROOT,
+        result = subprocess.run(["./gradlew", build_task, "--daemon", "-q"], cwd=ROOT, env=env,
                                 capture_output=True, text=True, timeout=INSTALL_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         return [f"Build timed out after {INSTALL_TIMEOUT_SECONDS}s: {build_task}"]
@@ -352,8 +356,11 @@ def install_build(adb, build_task):
     return []
 
 
-def measure_screen(adb, package, entry, gesture, size, tags):
+def measure_screen(adb, package, entry, gesture, size, tags, files=()):
     """Opens one screen, waits for the counts to reset, performs one gesture and compares the counts.
+
+    Also reports crashes, ANRs and StrictMode violations from the edited files (see health.py), from the
+    launch to the end of the gesture.
 
     Args:
         adb: adb command prefix.
@@ -362,36 +369,39 @@ def measure_screen(adb, package, entry, gesture, size, tags):
         gesture: one of GESTURES.
         size: (width, height) from screen_size().
         tags: tags expected on this screen.
+        files: repo-relative paths the agent edited, for StrictMode.
 
     Returns:
-        Failure lines: a count above MAX_RECOMPOSITIONS_ON_SCROLL, or "Inconclusive" when a tag
-        logged nothing or the screen did not open.
+        Failure lines: a count above MAX_RECOMPOSITIONS_ON_SCROLL, a crash, an ANR or a StrictMode
+        violation, or "Inconclusive" when a tag logged nothing or the screen did not open.
     """
     label = screen_label(entry)
     if gesture not in GESTURES:
         return [f"Inconclusive: unknown gesture {gesture!r} for {', '.join(tags)}."]
-    subprocess.run(adb + ["logcat", "-c"], capture_output=True)
+    clear_logs(adb)
     error = open_screen(adb, package, entry)
     if error:
-        return [f"Inconclusive: {error}"]
+        return app_problems(health_logs(adb), package, files) + [f"Inconclusive: {error}"]
     time.sleep(SETTLE_SECONDS)
     loaded = tracker_logs(adb)
+    health = health_logs(adb)  # read before the clear below, so violations while loading are kept
 
     swipe = gesture_command(adb, gesture, *size)
     before = ui_signature(ui_dump(adb)) if swipe else None
-    subprocess.run(adb + ["logcat", "-c"], capture_output=True)
+    clear_logs(adb)
     if swipe:
         subprocess.run(swipe, capture_output=True)
     time.sleep(GESTURE_SECONDS)
     during = tracker_logs(adb)
+    problems = app_problems(health + health_logs(adb), package, files)
     if swipe:
         not_moved = gesture_moved(before, ui_signature(ui_dump(adb)))
         if not_moved:
-            return [f"Inconclusive: on {label}, {not_moved}; counts not checked."]
+            return problems + [f"Inconclusive: on {label}, {not_moved}; counts not checked."]
 
     counts = parse_recomposition_counts(during)
     seen = parse_attached(loaded) | parse_attached(during) | parse_recomposition_counts(loaded).keys() | counts.keys()
-    errors = []
+    errors = list(problems)
     for tag in tags:
         if tag not in seen:
             errors.append(f"Inconclusive: no {TRACKER_TAG} log for {tag} on {label}; check that the screen opened.")
@@ -402,7 +412,7 @@ def measure_screen(adb, package, entry, gesture, size, tags):
     return errors
 
 
-def measure_frames(adb, package, entry, gesture, repeats, size):
+def measure_frames(adb, package, entry, gesture, repeats, size, files=()):
     """Opens one screen, resets gfxinfo, repeats the gesture and reads the frame stats.
 
     Args:
@@ -412,13 +422,15 @@ def measure_frames(adb, package, entry, gesture, repeats, size):
         gesture: one of GESTURES.
         repeats: how many times to perform the gesture.
         size: (width, height) from screen_size().
+        files: repo-relative paths the agent edited, to locate a crash.
 
     Returns:
-        (parse_gfxinfo result, error message or "").
+        (parse_gfxinfo result, error message or "", crash and ANR lines).
     """
+    clear_logs(adb)
     error = open_screen(adb, package, entry)
     if error:
-        return {}, error
+        return {}, error, app_problems(health_logs(adb), package, files)
     time.sleep(SETTLE_SECONDS)
     swipe = gesture_command(adb, gesture, *size)
     before = ui_signature(ui_dump(adb)) if swipe else None
@@ -428,11 +440,12 @@ def measure_frames(adb, package, entry, gesture, repeats, size):
             subprocess.run(swipe, capture_output=True)
         time.sleep(GESTURE_SECONDS)
     output = subprocess.run(adb + ["shell", "dumpsys", "gfxinfo", package], capture_output=True, text=True).stdout
+    problems = app_problems(health_logs(adb), package, files)  # StrictMode is off here: its provider is debug-only
     if swipe:
         not_moved = gesture_moved(before, ui_signature(ui_dump(adb)))
         if not_moved:
-            return {}, f"on {screen_label(entry)}, {not_moved}; frames not counted"
-    return parse_gfxinfo(output), ""
+            return {}, f"on {screen_label(entry)}, {not_moved}; frames not counted", problems
+    return parse_gfxinfo(output), "", problems
 
 
 def frame_verdict(label, runs, limits):
@@ -536,7 +549,7 @@ def check_recomposition(ctx):
             return errors + install_errors
     size = screen_size(adb)
     for (label, gesture), (entry, tags) in by_screen.items():
-        errors += measure_screen(adb, screen_map.get("package", ""), entry, gesture, size, tags)
+        errors += measure_screen(adb, screen_map.get("package", ""), entry, gesture, size, tags, ctx.files)
     return errors
 
 
@@ -571,9 +584,10 @@ def check_frames(ctx):
             continue
         runs = []
         for _ in range(screen_map.get("frame_runs", DEFAULT_FRAME_RUNS)):
-            stats, error = measure_frames(adb, package, entry, gesture, repeats, size)
-            if error:
-                errors.append(f"Inconclusive: {error}")
+            stats, error, problems = measure_frames(adb, package, entry, gesture, repeats, size, ctx.files)
+            errors += problems
+            if error or problems:
+                errors += [f"Inconclusive: {error}"] if error else []
                 break
             runs.append(stats)
         if runs:
@@ -583,3 +597,58 @@ def check_frames(ctx):
                 info(summary)
             errors += failures
     return errors
+
+
+DEFAULT_RELEASE_TASK = ":app:assembleRelease"
+RELEASE_SETTLE_SECONDS = 3
+
+
+def check_release_smoke(ctx):
+    """Release stage: installs the shrunk release build, cold-launches the app and opens the edited screens.
+
+    R8 can break code that works in debug (reflection, serialization, WorkManager's database), so this
+    reports crashes and ANRs on the release build. Only screens tagged in the changed files are opened,
+    as in the device stage; the cold launch always runs. The release build itself takes the most time,
+    and it replaces the build on the device, so this runs only on request: the agent asks the user
+    first (see CLAUDE.md).
+
+    Args:
+        ctx: check context; uses ctx.files, ctx.device and ctx.skip_install.
+
+    Returns:
+        Crash and ANR lines, or "Inconclusive" lines when there is no device or the build failed.
+    """
+    try:
+        screen_map = json.loads(read_text(SCREEN_MAP))
+    except ValueError:
+        return [f"Inconclusive: {os.path.relpath(SCREEN_MAP, ROOT)} is missing or not valid JSON."]
+    _, by_screen, _ = mapped_screens(ctx)
+    adb, missing = connected_adb(ctx)
+    if not adb:
+        return missing
+    package = screen_map.get("package", "")
+    task = screen_map.get("release_build_task") or screen_map.get("gfx_build_task") or DEFAULT_RELEASE_TASK
+    if not ctx.skip_install:
+        install_errors = install_build(adb, task)
+        if install_errors:
+            return install_errors
+    # None is the cold launch from the launcher; previews cannot run on a release build.
+    entries = [None] + [entry for entry, _ in by_screen.values() if entry.get("deeplink") or entry.get("steps")]
+    problems = []
+    for entry in entries:
+        label = screen_label(entry) if entry else "app launch"
+        clear_logs(adb)
+        if entry is None:
+            subprocess.run(adb + ["shell", "am", "force-stop", package], capture_output=True)
+            subprocess.run(adb + ["shell", "monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"],
+                           capture_output=True)
+            time.sleep(LAUNCH_SECONDS)
+        else:
+            error = open_screen(adb, package, entry)
+            if error:
+                problems.append(f"Inconclusive: {error}")
+            time.sleep(RELEASE_SETTLE_SECONDS)
+        found = app_problems(health_logs(adb), package, ctx.files)
+        problems += [f"{task}, {label}: {line}" for line in found]
+        info(f"{task}: {label} {'FAILED' if found else 'ok'}")
+    return problems

@@ -32,7 +32,7 @@ def run_manual(stage, module, device, skip_install):
     """Runs a stage against the git working tree and exits 1 on any failure.
 
     Args:
-        stage: "manual" or "device".
+        stage: "manual", "device" or "release".
         module: Gradle module to limit the files to, for example "feature:impl"; empty for all.
         device: adb serial; empty for the only connected device.
         skip_install: device stage only; use the build already on the device.
@@ -57,7 +57,8 @@ def main():
     parser.add_argument("--mark-turn", action="store_true", help="UserPromptSubmit hook: mark the turn start")
     parser.add_argument("--guard", action="store_true", help="PreToolUse hook: ask before a guardrail file edit")
     parser.add_argument("--record", action="store_true", help="PostToolUse hook: remember the edited file")
-    parser.add_argument("--stage", choices=["manual", "stop", "device"], default="manual")
+    parser.add_argument("--stage", choices=["manual", "stop", "device", "release"], default="manual",
+                        help="release: R8 build smoke test on the device; ask the user before running it")
     parser.add_argument("--module", default="", help="Check this Gradle module, e.g. app or feature:impl")
     parser.add_argument("--device", default="", help="adb serial")
     parser.add_argument("--skip-install", action="store_true", help="Device stage: use the installed build")

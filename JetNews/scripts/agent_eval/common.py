@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -11,10 +12,56 @@ KOTLIN_SUFFIXES = (".kt", ".kts")
 MAX_REPORTED_LINES = 40
 DEFAULT_SETTINGS = {
     "compile_task": "compileDebugKotlin",
+    "lint_task": "lintDebug",
+    "lint_ignore": [],
     "report_variant": "",
     "skip_compile_modules": [],
     "device_in_stop": False,
 }
+
+
+SDK_GUESSES = ("~/Library/Android/sdk", "~/Android/Sdk", os.path.join("%LOCALAPPDATA%", "Android", "Sdk"))
+NO_SDK = ("Inconclusive: no Android SDK found, so Gradle cannot run; nothing was compiled. Set ANDROID_HOME, "
+          "or sdk.dir in local.properties.")
+
+
+def find_sdk(local_properties, environ, adb_path, is_dir=os.path.isdir):
+    """Finds the Android SDK the way Gradle would, plus two fallbacks Gradle does not try.
+
+    Hooks run in the Claude Code process, which may lack the shell profile's ANDROID_HOME.
+
+    Args:
+        local_properties: text of local.properties, or "".
+        environ: environment variables.
+        adb_path: resolved path of adb on PATH, or None; its grandparent is the SDK.
+        is_dir: directory test, replaceable in the self-check.
+
+    Returns:
+        (sdk path, whether Gradle finds it without help), or (None, False) when there is no SDK.
+    """
+    match = re.search(r"^\s*sdk\.dir\s*=\s*(.+?)\s*$", local_properties, re.M)
+    if match:
+        return match.group(1).replace("\\:", ":").replace("\\\\", "\\"), True
+    for var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        if environ.get(var):
+            return environ[var], True
+    candidates = [os.path.dirname(os.path.dirname(adb_path))] if adb_path else []
+    candidates += [os.path.expandvars(os.path.expanduser(guess)) for guess in SDK_GUESSES]
+    return next(((path, False) for path in candidates if is_dir(os.path.join(path, "platforms"))), (None, False))
+
+
+def gradle_env():
+    """The environment for a Gradle run, with ANDROID_HOME added when Gradle would not find the SDK.
+
+    Returns:
+        An environment dict, or None when no SDK exists (callers report NO_SDK).
+    """
+    adb = shutil.which("adb")
+    sdk, found_by_gradle = find_sdk(read_text(os.path.join(ROOT, "local.properties")), os.environ,
+                                    os.path.realpath(adb) if adb else None)
+    if sdk is None:
+        return None
+    return dict(os.environ) if found_by_gradle else {**os.environ, "ANDROID_HOME": sdk}
 
 
 def load_settings():
@@ -102,10 +149,16 @@ def parse_hunks(diff):
 
 
 def kotlin_scope(files):
-    """Finds which lines of each Kotlin file a check must report on.
+    """line_scope for Kotlin files (.kt, .kts)."""
+    return line_scope(files, KOTLIN_SUFFIXES)
+
+
+def line_scope(files, suffixes):
+    """Finds which lines of each file a check must report on.
 
     Args:
-        files: repo-relative paths; non-Kotlin and deleted files are skipped.
+        files: repo-relative paths; files without one of the suffixes and deleted files are skipped.
+        suffixes: file name endings to keep.
 
     Returns:
         A dict from path to None for a file that is new since HEAD (every line), or to the set of
@@ -113,7 +166,7 @@ def kotlin_scope(files):
     """
     scope = {}
     for rel in files:
-        if not rel.endswith(KOTLIN_SUFFIXES) or not os.path.exists(os.path.join(ROOT, rel)):
+        if not rel.endswith(suffixes) or not os.path.exists(os.path.join(ROOT, rel)):
             continue
         in_head = subprocess.run(["git", "cat-file", "-e", f"HEAD:./{rel}"], cwd=ROOT, capture_output=True)
         if in_head.returncode != 0:

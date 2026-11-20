@@ -5,14 +5,24 @@ sends its report back to the agent, with at most 3 fix rounds per turn.
 
 | Check | Trigger | Scope |
 |---|---|---|
-| ktlint + Compose rules | Stop | New Kotlin files: formatted, every rule. Old files: Compose rules on changed lines |
+| ktlint + Compose rules | Stop | New Kotlin files: checked, then formatted; what the format fixed is listed as `Autocorrected` and does not block. Old files: Compose rules on changed lines |
 | detekt | Stop | New files: every line. Old files: changed lines |
-| Compile | Stop | `compile_task` of each module that owns an edited file |
+| Compile | Stop | `compile_task` of each module that owns an edited file; recompiled with `--rerun` when the Compose report is older than the edits |
 | Compose stability | Stop, after the compile | Unstable parameters of edited composables; unstable classes in edited `*UIModel.kt` |
-| Recomposition on a device | Manual: `--stage device` | Tagged composables, max 2 recompositions per gesture |
+| Android Lint | Stop, after the compile | `lint_task` (default `lintDebug`), including the checks AndroidX libraries ship (Compose runtime, UI, foundation, Material 3, Navigation, lifecycle). Runs only in modules that own an edited file. Lint analyses the whole module (it has no per-file mode) and the kit keeps errors and warnings on new files and changed lines; dependency-version advice is dropped. About 6–8 s per Stop on JetNews after the compile |
+| Recomposition on a device | `--stage device`, or Stop with `device_in_stop` | Tagged composables, max 2 recompositions per gesture |
+| Crash, ANR, StrictMode | Same as recomposition | Any crash or ANR of the app; StrictMode violations whose stack is in an edited file |
+| Release smoke test | On request: `--stage release` | Installs the R8 release build, cold-launches it and opens the screens tagged in edited files; reports crashes and ANRs. The agent asks the user first |
 | Guard | Before each Edit / Write | Asks the user before an edit to a kit file |
 
 Requirements: Python 3, Java 17 or later, git. The device stage also needs `adb`.
+
+Hooks run in the Claude Code process, which may not have your shell's `ANDROID_HOME`. The kit then
+finds the SDK from `local.properties`, the environment, `adb` on PATH, or the default install folder,
+and reports `Inconclusive` (never a block) when there is none.
+
+`config/ktlint.editorconfig` only fills gaps: a project `.editorconfig` overrides any key it sets, so
+the hook formats in the project's own style.
 
 ## 1. Copy the kit
 
@@ -142,6 +152,18 @@ Each entry can also set `gesture` (`swipe_up` by default, `swipe_down` or `none`
 
 Debug builds have slow frame times, so measure frames on a non-debuggable build when one exists.
 
+**App health.** While it measures each screen, the device stage reads logcat for crashes (`AndroidRuntime`), ANRs
+(`ActivityManager`) and StrictMode violations. For StrictMode, add a debug-only `ContentProvider` that turns on every
+policy with `penaltyLog()` before `Application.onCreate` (JetNews: `app/src/debug/.../StrictModeInstaller.kt` and
+`app/src/debug/AndroidManifest.xml`). A violation blocks only when a frame of its stack is in a file the agent edited,
+so startup disk reads from libraries or the OEM never count. A crash or ANR blocks even when it stops a tag from
+appearing. The frame check on the release build reports crashes and ANRs only.
+
+**Release smoke test.** `--stage release` builds `release_build_task` (else `gfx_build_task`, else
+`:app:assembleRelease`), installs it, cold-launches the app and opens each screen tagged in the edited files that has
+a deep link or steps. It catches R8 breakage such as a missing keep rule. It replaces the build on the device and takes a few
+minutes, so tell the agent (in CLAUDE.md) to ask the user before running it.
+
 With `device_in_stop: true`, the Stop hook runs both checks after the other checks. A missing device, tag or map
 entry never blocks; only a count or frame time over its limit does. Each Stop with a tagged file then builds and
 installs the app, and that adds about a minute or more.
@@ -151,3 +173,4 @@ installs the app, and that adds about a minute or more.
 - The Stop hook runs on its own. Fix every finding.
 - Do not edit the kit files or add suppressions to make a check pass; the guard asks the user first.
 - After ktlint formats a new file, read the file again before the next edit.
+- When a feature adds or changes a screen, ask the user whether to run `--stage release` before finishing.

@@ -19,10 +19,8 @@ package com.example.jetnews.utils
 import android.content.pm.ApplicationInfo
 import android.util.Log
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
-import androidx.compose.ui.node.currentValueOf
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.node.requireView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -54,15 +52,14 @@ private class RecomposeHighlighterElement(private val tag: String) : ModifierNod
     override fun hashCode(): Int = System.identityHashCode(this)
 }
 
-private class RecomposeHighlighterNode(var tag: String) :
-    Modifier.Node(),
-    CompositionLocalConsumerModifierNode {
+private class RecomposeHighlighterNode(var tag: String) : Modifier.Node() {
     private var enabled = false
     private var count = 0
     private var resetJob: Job? = null
 
     override fun onAttach() {
-        val flags = currentValueOf(LocalContext).applicationInfo.flags
+        // The View, not LocalContext: a CompositionLocal read in onAttach would not see later changes.
+        val flags = requireView().context.applicationInfo.flags
         enabled = (flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (enabled) Log.d(TRACKER_TAG, "Composable $tag attached")
     }

@@ -1,8 +1,11 @@
 """ktlint with the Compose rules, and detekt.
 
-Kotlin files new since HEAD are formatted with ktlint and checked on every line. Files that exist in
-HEAD are not formatted; only their changed lines are checked, against Compose rules and detekt.
+Kotlin files new since HEAD are checked on every line, then formatted with ktlint; what the format
+fixed is reported as "Autocorrected" lines, which never block a Stop. Files that exist in HEAD are not
+formatted; only their changed lines are checked, against Compose rules and detekt. A project
+.editorconfig overrides config/ktlint.editorconfig, so the hook follows the project's own style.
 """
+import collections
 import json
 import os
 import urllib.parse
@@ -12,17 +15,62 @@ from .tools import COMPOSE_RULES, DETEKT, KTLINT, run_tool, tool, tool_failure
 
 KTLINT_CONFIG = os.path.join(ROOT, "config", "ktlint.editorconfig")
 DETEKT_CONFIG = os.path.join(ROOT, "config", "detekt.yml")
+AUTOCORRECTED = "Autocorrected: "
+
+
+def ktlint_errors(ktlint, compose, paths, fix):
+    """Runs ktlint with the Compose rules.
+
+    Args:
+        ktlint, compose: tool paths.
+        paths: repo-relative files.
+        fix: True to format the files (-F); ktlint then reports only what it could not fix.
+
+    Returns:
+        ([(path, line, message, rule)], None), or (None, failure lines) when ktlint did not run.
+    """
+    command = ["java", "-jar", ktlint, f"--editorconfig={KTLINT_CONFIG}", "-R", compose,
+               "--relative", "--reporter=json,output={report}"] + (["-F"] if fix else []) + paths
+    report, output = run_tool(command, ".json")
+    if report is None:
+        return None, tool_failure("ktlint", output)
+    return [(entry["file"], error["line"], error["message"].splitlines()[0], error["rule"])
+            for entry in json.loads(report) for error in entry["errors"]], None
+
+
+def autocorrected(before, after):
+    """Finds the findings a format pass removed.
+
+    Formatting shifts line numbers, so findings are matched on (path, message, rule) counts.
+
+    Args:
+        before: ktlint_errors from the check-only run.
+        after: ktlint_errors from the -F run.
+
+    Returns:
+        The removed findings, with their line numbers from before the format.
+    """
+    left = collections.Counter((path, message, rule) for path, _, message, rule in after)
+    fixed = []
+    for finding in before:
+        key = (finding[0], finding[2], finding[3])
+        if left[key]:
+            left[key] -= 1
+        else:
+            fixed.append(finding)
+    return fixed
 
 
 def check_ktlint(ctx):
-    """Formats new Kotlin files and reports ktlint findings.
+    """Checks and formats new Kotlin files, and checks changed lines of old ones.
 
     Args:
         ctx: check context; uses ctx.files.
 
     Returns:
-        Failure lines as "path:line message [rule]". New files report every rule; old files report
-        Compose rules on changed lines only. Empty when ktlint is not installed.
+        Lines as "path:line message [rule]": what ktlint could not fix, then "Autocorrected" lines for
+        what it fixed in new files. Old files report Compose rules on changed lines only. Empty when
+        ktlint is not installed.
     """
     ktlint, compose = tool(KTLINT), tool(COMPOSE_RULES)
     if not (ktlint and compose):
@@ -30,25 +78,23 @@ def check_ktlint(ctx):
     scope = kotlin_scope(ctx.files)
     new = [rel for rel, lines in scope.items() if lines is None]
     old = [rel for rel, lines in scope.items() if lines]
-    findings = []
-    for paths, fix in ((new, True), (old, False)):
-        if not paths:
-            continue
-        command = ["java", "-jar", ktlint, f"--editorconfig={KTLINT_CONFIG}", "-R", compose,
-                   "--relative", "--reporter=json,output={report}"] + (["-F"] if fix else []) + paths
-        report, output = run_tool(command, ".json")
-        if report is None:
-            return tool_failure("ktlint", output)
-        for entry in json.loads(report):
-            rel = entry["file"]
-            for error in entry["errors"]:
-                if fix or (error["rule"].startswith("compose:") and error["line"] in scope.get(rel, ())):
-                    message = error["message"].splitlines()[0]
-                    findings.append(f"{rel}:{error['line']} {message} [{error['rule']}]")
-    findings = list(dict.fromkeys(findings))  # ktlint reports a finding once per format pass
-    if findings and new:
-        findings.insert(0, "New files were formatted with ktlint; read them again before an edit.")
-    return findings
+    findings, fixed = [], []
+    if new:
+        before, failure = ktlint_errors(ktlint, compose, new, fix=False)
+        after, failure = (before, failure) if failure else ktlint_errors(ktlint, compose, new, fix=True)
+        if failure:
+            return failure
+        findings += after
+        fixed = autocorrected(before, after)
+    if old:
+        errors, failure = ktlint_errors(ktlint, compose, old, fix=False)
+        if failure:
+            return failure
+        findings += [e for e in errors if e[3].startswith("compose:") and e[1] in scope[e[0]]]
+    lines = list(dict.fromkeys(f"{path}:{line} {message} [{rule}]" for path, line, message, rule in findings))
+    if lines and fixed:
+        lines.insert(0, "New files were formatted with ktlint; read them again before an edit.")
+    return lines + [f"{AUTOCORRECTED}{path}:{line} {message} [{rule}]" for path, line, message, rule in fixed]
 
 
 def sarif_path(uri):

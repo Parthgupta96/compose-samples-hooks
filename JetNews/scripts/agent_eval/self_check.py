@@ -2,13 +2,16 @@
 import os
 import tempfile
 
-from .common import ROOT, module_of, parse_hunks, parse_includes
+from .common import ROOT, find_sdk, module_of, parse_hunks, parse_includes
 from .checks import blocking
 from .device import (find_node, frame_verdict, gesture_command, gesture_moved, launch_command, parse_attached,
                      parse_gfxinfo, parse_recomposition_counts, ui_signature, variant_apks)
 from .hooks import GUARDED_PATHS
-from .lint import sarif_path
-from .stability import CLASS_DECL, COMPOSABLE_DECL, declarations, parse_stability_reports, report_files
+from .android_lint import lint_findings, parse_lint_xml, report_path
+from .health import parse_anrs, parse_crashes, parse_strictmode
+from .lint import AUTOCORRECTED, autocorrected, sarif_path
+from .stability import (CLASS_DECL, COMPOSABLE_DECL, declarations, parse_stability_reports, report_files,
+                        report_is_stale)
 
 
 def self_check():
@@ -28,6 +31,13 @@ def self_check():
     assert not "scripts/other.py".startswith(GUARDED_PATHS)
     assert not "config/recomposition_screens.json".startswith(GUARDED_PATHS)
 
+    # SDK lookup: local.properties, then the env, then adb's grandparent; only the last needs ANDROID_HOME set.
+    sdk_dirs = {"/sdk/platforms", "/opt/sdk/platforms"}.__contains__
+    assert find_sdk("sdk.dir=C\\:\\\\Android\n", {}, None, sdk_dirs) == ("C:\\Android", True)
+    assert find_sdk("", {"ANDROID_SDK_ROOT": "/env/sdk"}, None, sdk_dirs) == ("/env/sdk", True)
+    assert find_sdk("", {}, "/sdk/platform-tools/adb", sdk_dirs) == ("/sdk", False)
+    assert find_sdk("", {}, None, lambda path: False) == (None, False)
+
     assert parse_hunks("@@ -3 +3 @@\n@@ -10,0 +11,2 @@\n@@ -20,4 +22,0 @@\n") == {3, 11, 12}
     assert sarif_path("file://" + ROOT + "/a%20b/C.kt") == "a b/C.kt" and sarif_path("x/C.kt") == "x/C.kt"
 
@@ -46,6 +56,13 @@ def self_check():
             os.utime(path, (mtime, mtime))
         assert report_files(reports) == (new, os.path.join(reports, "app-classes.txt"))
         assert report_files(reports, "debug") == (old, os.path.join(reports, "app-debug-classes.txt"))
+        source_file = os.path.join(reports, "A.kt")
+        open(source_file, "w").close()
+        os.utime(source_file, (3, 3))
+        assert report_is_stale(new, [source_file])  # the agent edited after the last report
+        os.utime(new, (4, 4))
+        assert not report_is_stale(new, [source_file])
+        assert report_is_stale(None, [source_file])
     assert parse_stability_reports("fun Card(\n  items: List<String>\n)\n", "") == ({"Card": []}, set())
     source = "@Composable\nprivate fun RowScope.Card(\n    items: List<String>,\n) {\n}\ndata class Model(val a: Int)\n"
     assert declarations(source, COMPOSABLE_DECL) == [("Card", 2, 4)]
@@ -89,4 +106,51 @@ def self_check():
     assert variant_apks(apks, ":app:assembleBenchmark") == [apks[1]]
     assert variant_apks(apks, ":app:assembleFreeDebug") == [apks[2]]
     assert blocking(["Inconclusive: no device", "Row recomposed 5 times"]) == ["Row recomposed 5 times"]
+    assert blocking([AUTOCORRECTED + "A.kt:3 Preview should be private [compose:preview-public-check]"]) == []
+    # A format pass shifts lines, so findings match on (file, message, rule); only the removed one is reported.
+    before = [("A.kt", 3, "public preview", "compose:preview-public-check"), ("A.kt", 9, "mutable", "compose:mutable-params-check")]
+    after = [("A.kt", 7, "mutable", "compose:mutable-params-check")]
+    assert autocorrected(before, after) == [before[0]]
+    assert autocorrected(after, after) == []
+    # Android Lint: blocking severities on new files and changed lines only; version advice is dropped.
+    lint_xml = (f'<issues><issue id="FrequentlyChangingValue" severity="Warning" message="scroll read">'
+                f'<location file="{ROOT}/app/src/A.kt" line="24"/></issue>'
+                f'<issue id="UnusedResources" severity="Warning" message="unused"><location file="{ROOT}/app/res/s.xml" line="9"/></issue>'
+                f'<issue id="GradleDependency" severity="Warning" message="newer"><location file="{ROOT}/app/build.gradle.kts" line="3"/></issue>'
+                f'<issue id="ModifierNodeInspectableProperties" severity="Hint" message="hint"><location file="{ROOT}/app/src/A.kt" line="5"/></issue>'
+                f'<issue id="Other" severity="Error" message="old code"><location file="{ROOT}/app/src/Old.kt" line="7"/></issue></issues>')
+    scope = {"app/src/A.kt": None, "app/res/s.xml": {8}, "app/build.gradle.kts": {3}, "app/src/Old.kt": {1}}
+    assert lint_findings(parse_lint_xml(lint_xml), scope, {"GradleDependency"}) == \
+        ["app/src/A.kt:24 scroll read [FrequentlyChangingValue]"]
+    assert report_path("feature:impl", "lintFreeDebug").endswith("feature/impl/build/reports/lint-results-freeDebug.xml")
+
+    # Crashes and ANRs of the app only; StrictMode only when a frame is in an edited file.
+    log = ("11-20 06:35:08.096  9817  9817 E AndroidRuntime: FATAL EXCEPTION: main\n"
+           "11-20 06:35:08.096  9817  9817 E AndroidRuntime: Process: com.x, PID: 9817\n"
+           "11-20 06:35:08.096  9817  9817 E AndroidRuntime: java.io.FileNotFoundException: probe\n"
+           "11-20 06:35:08.096  9817  9817 E AndroidRuntime: \tat com.x.ui.AKt.A(A.kt:12)\n"
+           "11-20 06:35:09.000   900   950 E ActivityManager: ANR in com.x (com.x/.Main)\n"
+           "11-20 06:35:09.000   900   950 E ActivityManager: ANR in com.xy (com.xy/.Main)\n"
+           "11-20 06:34:14.310  9571  9571 D StrictMode: StrictMode policy violation; ~duration=5 ms: android.os.strictmode.DiskReadViolation\n"
+           "11-20 06:34:14.310  9571  9571 D StrictMode: \tat java.io.File.length(File.java:984)\n"
+           "11-20 06:34:14.310  9571  9571 D StrictMode: \tat com.x.JetApp.onCreate(JetApp.kt:32)\n"
+           "11-20 06:34:15.310  9571  9571 D StrictMode: StrictMode policy violation; ~duration=2 ms: android.os.strictmode.DiskReadViolation\n"
+           "11-20 06:34:15.310  9571  9571 D StrictMode: \tat com.x.ui.interests.InterestsScreenKt.InterestsScreen(InterestsScreen.kt:147)\n"
+           "11-20 06:34:15.310  9571  9571 D StrictMode: \tat com.x.ui.interests.InterestsScreenKt.entry(InterestsScreen.kt:124)\n")
+    assert parse_crashes(log, "com.x") == ["The app crashed: java.io.FileNotFoundException: probe (at com.x.ui.AKt.A(A.kt:12))"]
+    wrapped = ("E AndroidRuntime: FATAL EXCEPTION: main\nE AndroidRuntime: Process: com.x, PID: 1\n"
+               "E AndroidRuntime: java.lang.RuntimeException: java.lang.reflect.InvocationTargetException\n"
+               "E AndroidRuntime: \tat com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:614)\n"
+               "E AndroidRuntime: Caused by: java.io.FileNotFoundException: missing\n"
+               "E AndroidRuntime: \tat java.io.FileInputStream.open(FileInputStream.java:1)\n"
+               "E AndroidRuntime: \tat com.x.ui.RowKt.Row(Row.kt:189)\n")
+    assert parse_crashes(wrapped, "com.x", ["app/src/main/java/com/x/ui/Row.kt"]) == \
+        ["The app crashed: java.io.FileNotFoundException: missing (app/src/main/java/com/x/ui/Row.kt:189)"]
+    assert parse_crashes(wrapped, "com.x") == ["The app crashed: java.io.FileNotFoundException: missing (at com.x.ui.RowKt.Row(Row.kt:189))"]
+    assert parse_crashes(log, "com.other") == []
+    assert len(parse_anrs(log, "com.x")) == 1
+    edited = ["app/src/main/java/com/x/ui/interests/InterestsScreen.kt"]
+    assert parse_strictmode(log, edited) == \
+        ["StrictMode DiskReadViolation at app/src/main/java/com/x/ui/interests/InterestsScreen.kt:147. Move this work off the main thread."]
+    assert parse_strictmode(log, ["app/src/main/java/com/y/ui/interests/InterestsScreen.kt"]) == []  # same name, other package
     print("self-check ok")
