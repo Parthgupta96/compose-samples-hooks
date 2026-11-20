@@ -19,9 +19,17 @@ package com.example.jetnews.ui.post
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +49,7 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,8 +62,11 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -79,6 +91,7 @@ import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.PostsRepository
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.data.posts.impl.post3
+import com.example.jetnews.data.posts.impl.post5
 import com.example.jetnews.deeplink.util.DeepLinkPattern
 import com.example.jetnews.model.Post
 import com.example.jetnews.ui.home.HomeKey
@@ -92,6 +105,7 @@ import com.example.jetnews.ui.utils.TextSettingsButton
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 
@@ -252,6 +266,8 @@ fun PostScreen(
                 onSharePost = { sharePost(post, context) },
                 modifier = Modifier
                     .windowInsetsPadding(WindowInsets.safeDrawing)
+                    // Below the reading progress bar
+                    .padding(top = 8.dp)
                     .fillMaxWidth()
                     .wrapContentWidth(Alignment.End),
             )
@@ -279,17 +295,65 @@ private fun PostScreenContent(
 ) {
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
+    val progress by remember(lazyListState) { derivedStateOf { lazyListState.readingProgress() } }
+    val showBackToTop by rememberShowBackToTop(lazyListState)
+    val scope = rememberCoroutineScope()
     Scaffold(
         topBar = {
             if (showTopAppBar) {
-                TopAppBar(
-                    title = post.publication?.name.orEmpty(),
-                    navigationIconContent = navigationIconContent,
-                    scrollBehavior = scrollBehavior,
+                // Same colour as the top app bar, which changes once the article scrolls under it
+                val colors = TopAppBarDefaults.centerAlignedTopAppBarColors()
+                val isScrolledUnder by remember(topAppBarState) {
+                    derivedStateOf { topAppBarState.overlappedFraction > 0.01f }
+                }
+                val containerColor by animateColorAsState(
+                    if (isScrolledUnder) colors.scrolledContainerColor else colors.containerColor,
+                )
+                Column {
+                    TopAppBar(
+                        title = post.publication?.name.orEmpty(),
+                        navigationIconContent = navigationIconContent,
+                        scrollBehavior = scrollBehavior,
+                    )
+                    ReadingProgress(
+                        progress = { progress },
+                        readTimeMinutes = post.metadata.readTimeMinutes,
+                        containerColor = containerColor,
+                    )
+                }
+            } else {
+                // No top app bar on large screens: the progress sits at the top of the article
+                ReadingProgress(
+                    progress = { progress },
+                    readTimeMinutes = post.metadata.readTimeMinutes,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets),
                 )
             }
         },
         bottomBar = bottomBarContent,
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = showBackToTop,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut() + scaleOut(),
+            ) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        scope.launch {
+                            // A scroll from code skips the nested scroll, so bring the top app bar back too.
+                            launch {
+                                animate(topAppBarState.heightOffset, 0f) { value, _ -> topAppBarState.heightOffset = value }
+                            }
+                            lazyListState.animateScrollToItem(0)
+                            topAppBarState.contentOffset = 0f
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.post_back_to_top))
+                }
+            }
+        },
     ) { innerPadding ->
         PostContent(
             post = post,
@@ -411,6 +475,25 @@ fun PreviewPostDrawer() {
             (BlockingFakePostsRepository().getPost(post3.id) as Result.Success).data
         }
         PostScreen(post, false, {}, false, {})
+    }
+}
+
+@Preview("Post screen, part way through")
+@Preview("Post screen, part way through (dark)", uiMode = UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewPostReadingProgress() {
+    JetnewsTheme {
+        val post = runBlocking {
+            (BlockingFakePostsRepository().getPost(post5.id) as Result.Success).data
+        }
+        PostScreen(
+            post = post,
+            isExpandedScreen = false,
+            onBack = {},
+            isFavorite = false,
+            onToggleFavorite = {},
+            lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = 18),
+        )
     }
 }
 
