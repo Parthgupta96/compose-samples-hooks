@@ -19,9 +19,17 @@ package com.example.jetnews.ui.post
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,8 +49,10 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -53,8 +63,11 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -79,6 +92,7 @@ import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.PostsRepository
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.data.posts.impl.post3
+import com.example.jetnews.data.posts.impl.post5
 import com.example.jetnews.deeplink.util.DeepLinkPattern
 import com.example.jetnews.model.Post
 import com.example.jetnews.ui.home.HomeKey
@@ -89,9 +103,12 @@ import com.example.jetnews.ui.utils.BookmarkButton
 import com.example.jetnews.ui.utils.FavoriteButton
 import com.example.jetnews.ui.utils.ShareButton
 import com.example.jetnews.ui.utils.TextSettingsButton
+import com.example.jetnews.utils.recomposeHighlighter
+import kotlin.math.ceil
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 
@@ -240,22 +257,21 @@ fun PostScreen(
                     )
                 }
             },
+            // Toolbar shown in place of the top app bar when the screen is expanded
+            expandedTopBarContent = {
+                PostTopBar(
+                    isFavorite = isFavorite,
+                    onToggleFavorite = onToggleFavorite,
+                    onSharePost = { sharePost(post, context) },
+                    modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .fillMaxWidth()
+                        .wrapContentWidth(Alignment.End),
+                )
+            },
             lazyListState = lazyListState,
             showTopAppBar = !isExpandedScreen,
         )
-
-        if (isExpandedScreen) {
-            // Floating toolbar
-            PostTopBar(
-                isFavorite = isFavorite,
-                onToggleFavorite = onToggleFavorite,
-                onSharePost = { sharePost(post, context) },
-                modifier = Modifier
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .fillMaxWidth()
-                    .wrapContentWidth(Alignment.End),
-            )
-        }
     }
 }
 
@@ -265,6 +281,7 @@ fun PostScreen(
  * @param post (state) item to display
  * @param navigationIconContent (UI) content to show for the navigation icon
  * @param bottomBarContent (UI) content to show for the bottom bar
+ * @param expandedTopBarContent (UI) content to show above the reading progress when [showTopAppBar] is false
  * @param lazyListState (state) the [LazyListState] for the post content
  * @param showTopAppBar (state) if the top app bar should be shown
  */
@@ -274,22 +291,43 @@ private fun PostScreenContent(
     post: Post,
     navigationIconContent: @Composable () -> Unit = { },
     bottomBarContent: @Composable () -> Unit = { },
+    expandedTopBarContent: @Composable () -> Unit = { },
     lazyListState: LazyListState = rememberLazyListState(),
     showTopAppBar: Boolean = true,
 ) {
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
+    val scope = rememberCoroutineScope()
     Scaffold(
         topBar = {
-            if (showTopAppBar) {
-                TopAppBar(
-                    title = post.publication?.name.orEmpty(),
-                    navigationIconContent = navigationIconContent,
-                    scrollBehavior = scrollBehavior,
-                )
+            Column {
+                if (showTopAppBar) {
+                    TopAppBar(
+                        title = post.publication?.name.orEmpty(),
+                        navigationIconContent = navigationIconContent,
+                        scrollBehavior = scrollBehavior,
+                    )
+                } else {
+                    expandedTopBarContent()
+                }
+                ReadingProgress(lazyListState, post.metadata.readTimeMinutes)
             }
         },
         bottomBar = bottomBarContent,
+        floatingActionButton = {
+            BackToTopButton(
+                lazyListState = lazyListState,
+                onClick = {
+                    scope.launch {
+                        // Programmatic scrolls skip nestedScroll, so bring the collapsed app bar back too
+                        launch {
+                            animate(topAppBarState.heightOffset, 0f) { value, _ -> topAppBarState.heightOffset = value }
+                        }
+                        lazyListState.animateScrollToItem(0)
+                    }
+                },
+            )
+        },
     ) { innerPadding ->
         PostContent(
             post = post,
@@ -299,6 +337,86 @@ private fun PostScreenContent(
                     .nestedScroll(scrollBehavior.nestedScrollConnection)
             } else Modifier,
             state = lazyListState,
+        )
+    }
+}
+
+/**
+ * Thin progress bar with the reading time left, both following [lazyListState].
+ *
+ * State is read in derived state and the bar's draw lambda, so only a change in whole minutes recomposes.
+ */
+@Composable
+private fun ReadingProgress(lazyListState: LazyListState, readTimeMinutes: Int, modifier: Modifier = Modifier) {
+    val progress = remember(lazyListState) { derivedStateOf { lazyListState.readingProgress() } }
+    val minutes by remember(lazyListState, readTimeMinutes) {
+        derivedStateOf { minutesLeft(readTimeMinutes, progress.value) }
+    }
+    // Opaque so the article does not show through when the app bar collapses
+    Column(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        LinearProgressIndicator(
+            progress = { progress.value },
+            modifier = Modifier
+                .fillMaxWidth()
+                .recomposeHighlighter("ReadingProgressBar"),
+        )
+        Text(
+            text = if (minutes == 0) {
+                stringResource(R.string.post_reading_finished)
+            } else {
+                stringResource(R.string.post_reading_min_left, minutes)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .recomposeHighlighter("ReadingTimeLeft"),
+        )
+    }
+}
+
+/**
+ * Fraction of the post scrolled, 0 at the top and 1 only at the very end.
+ */
+internal fun LazyListState.readingProgress(): Float {
+    if (!canScrollForward) return if (canScrollBackward) 1f else 0f
+    val info = layoutInfo
+    val first = info.visibleItemsInfo.firstOrNull() ?: return 0f
+    // ponytail: item-count estimate, uneven paragraph heights make the bar speed vary a little
+    val scrollableItems = info.totalItemsCount - info.visibleItemsInfo.size
+    if (scrollableItems <= 0) return 0f
+    val position = firstVisibleItemIndex + firstVisibleItemScrollOffset.toFloat() / first.size.coerceAtLeast(1)
+    // Below 1 until the real end, so "Finished" only shows there
+    return (position / scrollableItems).coerceIn(0f, 0.99f)
+}
+
+/**
+ * Whole minutes left, rounded up. 0 means finished.
+ */
+internal fun minutesLeft(readTimeMinutes: Int, progress: Float): Int = ceil(readTimeMinutes * (1f - progress)).toInt()
+
+/**
+ * "Back to top" button, shown with an animation once the user has scrolled past the first screen.
+ */
+@Composable
+private fun BackToTopButton(lazyListState: LazyListState, onClick: () -> Unit) {
+    // Past the first screen ≈ scrolled past as many items as currently fit on screen
+    val visible by remember(lazyListState) {
+        derivedStateOf {
+            val itemsOnScreen = lazyListState.layoutInfo.visibleItemsInfo.size
+            itemsOnScreen > 0 && lazyListState.firstVisibleItemIndex >= itemsOnScreen
+        }
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + scaleIn(),
+        exit = fadeOut() + scaleOut(),
+    ) {
+        ExtendedFloatingActionButton(
+            text = { Text(stringResource(R.string.post_back_to_top)) },
+            icon = { Icon(painterResource(R.drawable.ic_arrow_upward), contentDescription = null) },
+            onClick = onClick,
+            modifier = Modifier.recomposeHighlighter("BackToTop"),
         )
     }
 }
@@ -428,5 +546,17 @@ fun PreviewPostNavRail() {
             (BlockingFakePostsRepository().getPost(post3.id) as Result.Success).data
         }
         PostScreen(post, true, {}, false, {})
+    }
+}
+
+@Preview("Post screen scrolled, with back to top")
+@Preview("Post screen scrolled, with back to top (dark)", uiMode = UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewPostScrolled() {
+    JetnewsTheme {
+        val post = runBlocking {
+            (BlockingFakePostsRepository().getPost(post5.id) as Result.Success).data
+        }
+        PostScreen(post, false, {}, false, {}, lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = 12))
     }
 }
