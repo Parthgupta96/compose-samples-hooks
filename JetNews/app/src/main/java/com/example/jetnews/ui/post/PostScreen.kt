@@ -19,9 +19,14 @@ package com.example.jetnews.ui.post
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,8 +46,10 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -53,8 +60,11 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -64,6 +74,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
@@ -79,6 +90,7 @@ import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.PostsRepository
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.data.posts.impl.post3
+import com.example.jetnews.data.posts.impl.post5
 import com.example.jetnews.deeplink.util.DeepLinkPattern
 import com.example.jetnews.model.Post
 import com.example.jetnews.ui.home.HomeKey
@@ -89,9 +101,11 @@ import com.example.jetnews.ui.utils.BookmarkButton
 import com.example.jetnews.ui.utils.FavoriteButton
 import com.example.jetnews.ui.utils.ShareButton
 import com.example.jetnews.ui.utils.TextSettingsButton
+import kotlin.math.ceil
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 
@@ -279,17 +293,46 @@ private fun PostScreenContent(
 ) {
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
+    val progress by remember(lazyListState) { derivedStateOf { lazyListState.readingProgress() } }
+    val minutesLeft by remember(lazyListState, post) {
+        derivedStateOf { minutesLeft(post.metadata.readTimeMinutes, progress) }
+    }
+    // ponytail: "past the first screen" ~ scrolled past as many items as fit on screen; measure px if items vary a lot
+    val showBackToTop by remember(lazyListState) {
+        derivedStateOf {
+            lazyListState.firstVisibleItemIndex > 0 &&
+                lazyListState.firstVisibleItemIndex >= lazyListState.layoutInfo.visibleItemsInfo.size
+        }
+    }
+    val coroutineScope = rememberCoroutineScope()
     Scaffold(
         topBar = {
-            if (showTopAppBar) {
-                TopAppBar(
-                    title = post.publication?.name.orEmpty(),
-                    navigationIconContent = navigationIconContent,
-                    scrollBehavior = scrollBehavior,
+            Column {
+                if (showTopAppBar) {
+                    TopAppBar(
+                        title = post.publication?.name.orEmpty(),
+                        navigationIconContent = navigationIconContent,
+                        scrollBehavior = scrollBehavior,
+                    )
+                }
+                ReadingProgress(
+                    progress = { progress },
+                    minutesLeft = minutesLeft,
+                    // Without the app bar, nothing else keeps the bar out of the status bar
+                    modifier = if (showTopAppBar) Modifier else Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets),
                 )
             }
         },
         bottomBar = bottomBarContent,
+        floatingActionButton = {
+            AnimatedVisibility(visible = showBackToTop, enter = scaleIn(), exit = scaleOut()) {
+                ExtendedFloatingActionButton(
+                    onClick = { coroutineScope.launch { lazyListState.animateScrollToItem(0) } },
+                ) {
+                    Text(stringResource(R.string.post_back_to_top))
+                }
+            }
+        },
     ) { innerPadding ->
         PostContent(
             post = post,
@@ -301,6 +344,47 @@ private fun PostScreenContent(
             state = lazyListState,
         )
     }
+}
+
+/**
+ * Thin progress bar with a "N min left" label.
+ *
+ * @param progress (state) fraction of the post read, 0 to 1
+ * @param minutesLeft (state) whole minutes left, 0 when finished
+ */
+@Composable
+private fun ReadingProgress(progress: () -> Float, minutesLeft: Int, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth(), drawStopIndicator = {})
+        Text(
+            text = if (minutesLeft == 0) {
+                stringResource(R.string.post_finished)
+            } else {
+                pluralStringResource(R.plurals.post_min_left, minutesLeft, minutesLeft)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier
+                .align(Alignment.End)
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/** Whole minutes left, rounded up. 0 only once the post is fully read. */
+internal fun minutesLeft(readTimeMinutes: Int, progress: Float): Int =
+    if (progress >= 1f) 0 else ceil(readTimeMinutes * (1f - progress)).toInt().coerceAtLeast(1)
+
+/**
+ * Approximate fraction of the list scrolled, 0 at the top and exactly 1 at the end.
+ */
+// ponytail: item-count based, items differ in height so the bar is not pixel-exact
+private fun LazyListState.readingProgress(): Float {
+    if (!canScrollForward) return 1f
+    val visible = layoutInfo.visibleItemsInfo
+    val first = visible.firstOrNull() ?: return 0f
+    val scrollable = (layoutInfo.totalItemsCount - visible.size).coerceAtLeast(1)
+    val scrolled = firstVisibleItemIndex + firstVisibleItemScrollOffset.toFloat() / first.size.coerceAtLeast(1)
+    return (scrolled / scrollable).coerceIn(0f, 1f)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -428,5 +512,17 @@ fun PreviewPostNavRail() {
             (BlockingFakePostsRepository().getPost(post3.id) as Result.Success).data
         }
         PostScreen(post, true, {}, false, {})
+    }
+}
+
+@Preview("Post screen scrolled, reading progress")
+@Preview("Post screen scrolled, reading progress (dark)", uiMode = UI_MODE_NIGHT_YES)
+@Composable
+fun PreviewPostReadingProgress() {
+    JetnewsTheme {
+        val post = runBlocking {
+            (BlockingFakePostsRepository().getPost(post5.id) as Result.Success).data
+        }
+        PostScreen(post, false, {}, false, {}, lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = 10))
     }
 }
