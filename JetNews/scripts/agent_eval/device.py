@@ -40,7 +40,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-from .common import NO_SDK, ROOT, gradle_env, read_text
+from .common import NO_SDK, ROOT, gradle_env, load_settings, read_text
 from .health import app_problems, clear_logs, health_logs
 
 SCREEN_MAP = os.path.join(ROOT, "config", "recomposition_screens.json")
@@ -356,7 +356,7 @@ def install_build(adb, build_task):
     return []
 
 
-def measure_screen(adb, package, entry, gesture, size, tags, files=()):
+def measure_screen(adb, package, entry, gesture, size, tags, files=(), limits=None):
     """Opens one screen, waits for the counts to reset, performs one gesture and compares the counts.
 
     Also reports crashes, ANRs and StrictMode violations from the edited files (see health.py), from the
@@ -370,9 +370,10 @@ def measure_screen(adb, package, entry, gesture, size, tags, files=()):
         size: (width, height) from screen_size().
         tags: tags expected on this screen.
         files: repo-relative paths the agent edited, for StrictMode.
+        limits: {tag: max recompositions in one gesture}; a tag without one gets MAX_RECOMPOSITIONS_ON_SCROLL.
 
     Returns:
-        Failure lines: a count above MAX_RECOMPOSITIONS_ON_SCROLL, a crash, an ANR or a StrictMode
+        Failure lines: a count above the tag's limit, a crash, an ANR or a StrictMode
         violation, or "Inconclusive" when a tag logged nothing or the screen did not open.
     """
     label = screen_label(entry)
@@ -406,9 +407,10 @@ def measure_screen(adb, package, entry, gesture, size, tags, files=()):
         if tag not in seen:
             errors.append(f"Inconclusive: no {TRACKER_TAG} log for {tag} on {label}; check that the screen opened.")
             continue
-        info(f"{tag}: {counts.get(tag, 0)} recompositions during {gesture} on {label}")
-        if counts.get(tag, 0) > MAX_RECOMPOSITIONS_ON_SCROLL:
-            errors.append(f"{tag} recomposed {counts[tag]} times during {gesture} (max {MAX_RECOMPOSITIONS_ON_SCROLL}).")
+        limit = (limits or {}).get(tag, MAX_RECOMPOSITIONS_ON_SCROLL)
+        info(f"{tag}: {counts.get(tag, 0)} recompositions during {gesture} on {label} (max {limit})")
+        if counts.get(tag, 0) > limit:
+            errors.append(f"{tag} recomposed {counts[tag]} times during {gesture} (max {limit}).")
     return errors
 
 
@@ -510,11 +512,38 @@ def mapped_screens(ctx):
     return screen_map, by_screen, errors
 
 
-def connected_adb(ctx):
-    """Builds the adb prefix when the device is connected.
+def choose_device(devices_output, wanted=""):
+    """Picks the device to measure on.
+
+    With one device, that one. With several and none named, the only physical one, so an emulator the
+    agent started for another check does not get in the way.
 
     Args:
-        ctx: check context; uses ctx.device.
+        devices_output: output of `adb devices`.
+        wanted: serial from --device or device_serial in config/agent_eval.json; "" for any.
+
+    Returns:
+        (serial or None, "Inconclusive" line or "").
+    """
+    ready = [line.split("\t")[0] for line in devices_output.splitlines()[1:] if line.endswith("\tdevice")]
+    if wanted:
+        return (wanted, "") if wanted in ready else (None, f"Inconclusive: device {wanted} is not connected.")
+    physical = [serial for serial in ready if not serial.startswith("emulator-")]
+    if len(ready) == 1:
+        return ready[0], ""
+    if len(physical) == 1:
+        return physical[0], ""
+    if not ready:
+        return None, "Inconclusive: no authorised device connected."
+    return None, (f"Inconclusive: {len(ready)} devices connected ({', '.join(ready)}); set device_serial in "
+                  "config/agent_eval.json or pass --device.")
+
+
+def connected_adb(ctx):
+    """Builds the adb prefix for the device to measure on.
+
+    Args:
+        ctx: check context; uses ctx.device, else device_serial from config/agent_eval.json.
 
     Returns:
         (adb prefix or None, "Inconclusive" lines).
@@ -523,9 +552,10 @@ def connected_adb(ctx):
         devices = subprocess.run(["adb", "devices"], capture_output=True, text=True).stdout
     except OSError:
         return None, ["Inconclusive: adb is not on PATH."]
-    if f"{ctx.device}\tdevice" not in devices:
-        return None, ["Inconclusive: no authorised device connected."]
-    return ["adb"] + (["-s", ctx.device] if ctx.device else []), []
+    serial, problem = choose_device(devices, ctx.device or load_settings()["device_serial"])
+    if not serial:
+        return None, [problem]
+    return ["adb", "-s", serial], []
 
 
 def check_recomposition(ctx):
@@ -548,8 +578,11 @@ def check_recomposition(ctx):
         if install_errors:
             return errors + install_errors
     size = screen_size(adb)
+    screens = screen_map.get("screens", {})
+    # An element meant to update during a swipe (a scroll progress label, say) sets its own limit.
+    limits = {tag: screens[tag].get("max_recompositions", MAX_RECOMPOSITIONS_ON_SCROLL) for tag in screens}
     for (label, gesture), (entry, tags) in by_screen.items():
-        errors += measure_screen(adb, screen_map.get("package", ""), entry, gesture, size, tags, ctx.files)
+        errors += measure_screen(adb, screen_map.get("package", ""), entry, gesture, size, tags, ctx.files, limits)
     return errors
 
 

@@ -13,7 +13,7 @@ sends its report back to the agent, with at most 3 fix rounds per turn.
 | Recomposition on a device | `--stage device`, or Stop with `device_in_stop` | Tagged composables, max 2 recompositions per gesture |
 | Crash, ANR, StrictMode | Same as recomposition | Any crash or ANR of the app; StrictMode violations whose stack is in an edited file |
 | Release smoke test | On request: `--stage release` | Installs the R8 release build, cold-launches it and opens the screens tagged in edited files; reports crashes and ANRs. The agent asks the user first |
-| Guard | Before each Edit / Write | Asks the user before an edit to a kit file |
+| Guard | Before each Edit / Write | Asks the user before an edit to a kit file, and before an edit that adds a dependency to a `build.gradle(.kts)` or any line to `libs.versions.toml` |
 
 Requirements: Python 3, Java 17 or later, git. The device stage also needs `adb`.
 
@@ -133,8 +133,10 @@ Add a debug-only `Modifier.recomposeHighlighter(tag)` that logs these lines. Goo
 recompose-highlighter snippet is a good base: log `attached` in `onAttach()` and `count=` where it
 increments its counter.
 
-Tag the root of each new list row, and each screen root, with `Modifier.recomposeHighlighter("<Name>")`. Then map each
-tag in `config/recomposition_screens.json`. A screen opens in one of three ways:
+Tag the root of each new list row, and each screen root, with `Modifier.recomposeHighlighter("<Name>")`. Also tag the
+innermost element that shows a value that changes while scrolling or animating: a tag counts only recompositions of
+the composable that creates the modifier, so a root tag misses work inside a child's content lambda (a `Surface` or
+`Card` body, say). Then map each tag in `config/recomposition_screens.json`. A screen opens in one of three ways:
 
 | Entry | Opens | Notes |
 |---|---|---|
@@ -142,13 +144,17 @@ tag in `config/recomposition_screens.json`. A screen opens in one of three ways:
 | `"steps": [{"tap_desc": "…"}, {"tap_text": "…"}]` | the full page: launches the app, then taps each node found by content description or text | Breaks when the UI text changes |
 | `"preview": "com.example.FooKt.FooPreview"` | the `@Preview` through ui-tooling's `PreviewActivity` | Debug builds only; no app scaffold, drawer or real insets |
 
-Each entry can also set `gesture` (`swipe_up` by default, `swipe_down` or `none`) and its own `max_janky_percent` or
-`max_p95_ms`. The top-level keys are:
+Each entry can also set `gesture` (`swipe_up` by default, `swipe_down` or `none`), its own `max_janky_percent` or
+`max_p95_ms`, and `max_recompositions` (default 2) for an element that is meant to update during a swipe, such as a
+scroll progress label. The limit is printed with every count, so a raised limit stays visible. The top-level keys are:
 
 - `package` and `build_task`, which must name the same debug variant;
 - `gfx_build_task`, which is optional, for example a non-debuggable `:app:assembleBenchmark`. Frames are then measured
   on that build, which cannot open a preview;
 - `gesture_repeats`, `frame_runs`, and global limits.
+
+With several devices connected, the device stage uses the only physical one (an emulator the agent started does not
+get in the way). With several phones, set `device_serial` in `config/agent_eval.json` or pass `--device`.
 
 Debug builds have slow frame times, so measure frames on a non-debuggable build when one exists.
 

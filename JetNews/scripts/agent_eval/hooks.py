@@ -27,6 +27,12 @@ GUARDED_PATHS = (
     "config/ktlint.editorconfig",
 )
 # config/recomposition_screens.json is not guarded: an agent maps the tags it adds without asking.
+BUILD_FILES = ("build.gradle", "build.gradle.kts")
+VERSION_CATALOG = "libs.versions.toml"
+DEPENDENCY_LINE = re.compile(
+    r"^\s*(implementation|api|compileOnly|runtimeOnly|annotationProcessor|kapt|ksp|lintChecks|coreLibraryDesugaring|"
+    r"\w*(Implementation|Api|CompileOnly|RuntimeOnly))\b\s*[(\"']"
+)
 
 
 def session_file(payload, kind="files"):
@@ -98,15 +104,55 @@ def mark_turn():
     remove(session_file(payload, "rounds"))
 
 
+def added_dependencies(rel, old_text, new_text):
+    """Finds the dependency lines an edit adds to a build file or the version catalog.
+
+    Args:
+        rel: repo-relative path of the edited file.
+        old_text: text the edit replaces (the whole file for a Write).
+        new_text: text the edit writes.
+
+    Returns:
+        The added lines: dependency declarations in build.gradle(.kts), or any non-comment line in
+        libs.versions.toml. Empty for other files.
+    """
+    added = [line.strip() for line in new_text.splitlines() if line.strip() and line not in old_text.splitlines()]
+    if os.path.basename(rel) in BUILD_FILES:
+        return [line for line in added if DEPENDENCY_LINE.match(line)]
+    if os.path.basename(rel) == VERSION_CATALOG:
+        return [line for line in added if not line.startswith("#")]
+    return []
+
+
+def edit_texts(payload, rel):
+    """(old text, new text) of an Edit, MultiEdit or Write."""
+    tool_input = payload.get("tool_input", {})
+    if "content" in tool_input:  # Write replaces the whole file
+        return read_text(os.path.join(ROOT, rel)), str(tool_input["content"])
+    edits = tool_input.get("edits") or [tool_input]
+    return ("\n".join(str(e.get("old_string", "")) for e in edits),
+            "\n".join(str(e.get("new_string", "")) for e in edits))
+
+
+def ask(reason):
+    """Prints a PreToolUse decision that asks the user."""
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": reason,
+    }}))
+
+
 def guard():
-    """PreToolUse Edit|Write: asks the user before an edit to a file in GUARDED_PATHS."""
-    rel = edited_path(read_payload())
+    """PreToolUse Edit|Write: asks the user before an edit to a kit file, or one that adds a dependency."""
+    payload = read_payload()
+    rel = edited_path(payload)
     if rel.startswith(GUARDED_PATHS):
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
-            "permissionDecisionReason": f"{rel} is a guardrail file; a change can weaken the checks.",
-        }}))
+        ask(f"{rel} is a guardrail file; a change can weaken the checks.")
+        return
+    dependencies = added_dependencies(rel, *edit_texts(payload, rel)) if rel else []
+    if dependencies:
+        ask(f"This edit adds a dependency to {rel}: {'; '.join(dependencies[:3])}")
 
 
 def record():

@@ -17,6 +17,7 @@ DEFAULT_SETTINGS = {
     "report_variant": "",
     "skip_compile_modules": [],
     "device_in_stop": False,
+    "device_serial": "",
 }
 
 

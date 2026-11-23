@@ -4,9 +4,9 @@ import tempfile
 
 from .common import ROOT, find_sdk, module_of, parse_hunks, parse_includes
 from .checks import blocking
-from .device import (find_node, frame_verdict, gesture_command, gesture_moved, launch_command, parse_attached,
+from .device import (choose_device, find_node, frame_verdict, gesture_command, gesture_moved, launch_command, parse_attached,
                      parse_gfxinfo, parse_recomposition_counts, ui_signature, variant_apks)
-from .hooks import GUARDED_PATHS
+from .hooks import GUARDED_PATHS, added_dependencies
 from .android_lint import lint_findings, parse_lint_xml, report_path
 from .health import parse_anrs, parse_crashes, parse_strictmode
 from .lint import AUTOCORRECTED, autocorrected, sarif_path
@@ -153,4 +153,20 @@ def self_check():
     assert parse_strictmode(log, edited) == \
         ["StrictMode DiskReadViolation at app/src/main/java/com/x/ui/interests/InterestsScreen.kt:147. Move this work off the main thread."]
     assert parse_strictmode(log, ["app/src/main/java/com/y/ui/interests/InterestsScreen.kt"]) == []  # same name, other package
+    # Dependency guard: only added dependency declarations (or catalog lines) ask the user.
+    old = "dependencies {\n    implementation(libs.a)\n}\n"
+    assert added_dependencies("app/build.gradle.kts", old, old.replace("}", "    testImplementation(libs.junit)\n}")) == \
+        ["testImplementation(libs.junit)"]
+    assert added_dependencies("app/build.gradle", "", "    debugImplementation 'x:y:1'\n    minSdk 24\n") == ["debugImplementation 'x:y:1'"]
+    assert added_dependencies("app/build.gradle.kts", old, old + "android { minSdk = 24 }\n") == []
+    assert added_dependencies("gradle/libs.versions.toml", "[libraries]\n", "[libraries]\njunit = { module = \"junit:junit\" }\n") == \
+        ['junit = { module = "junit:junit" }']
+    assert added_dependencies("app/src/A.kt", "", "implementation(x)") == []
+
+    # Device choice: the only physical device wins over emulators; several phones need a serial.
+    devices = "List of devices attached\nR58\tdevice\nemulator-5554\tdevice\nX1\toffline\n"
+    assert choose_device(devices) == ("R58", "")
+    assert choose_device(devices, "emulator-5554") == ("emulator-5554", "")
+    assert choose_device(devices.replace("emulator-5554", "R59"))[0] is None
+    assert choose_device("List of devices attached\n")[1].startswith("Inconclusive")
     print("self-check ok")
