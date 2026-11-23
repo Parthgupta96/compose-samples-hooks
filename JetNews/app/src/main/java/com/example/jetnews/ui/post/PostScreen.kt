@@ -19,14 +19,27 @@ package com.example.jetnews.ui.post
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.plus
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,8 +66,11 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -63,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Devices
@@ -79,6 +96,7 @@ import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.PostsRepository
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.data.posts.impl.post3
+import com.example.jetnews.data.posts.impl.post5
 import com.example.jetnews.deeplink.util.DeepLinkPattern
 import com.example.jetnews.model.Post
 import com.example.jetnews.ui.home.HomeKey
@@ -92,6 +110,7 @@ import com.example.jetnews.ui.utils.TextSettingsButton
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 
@@ -242,20 +261,19 @@ fun PostScreen(
             },
             lazyListState = lazyListState,
             showTopAppBar = !isExpandedScreen,
-        )
 
-        if (isExpandedScreen) {
-            // Floating toolbar
-            PostTopBar(
-                isFavorite = isFavorite,
-                onToggleFavorite = onToggleFavorite,
-                onSharePost = { sharePost(post, context) },
-                modifier = Modifier
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .fillMaxWidth()
-                    .wrapContentWidth(Alignment.End),
-            )
-        }
+            // Without a top app bar, the toolbar sits above the reading progress
+            expandedTopBarContent = {
+                PostTopBar(
+                    isFavorite = isFavorite,
+                    onToggleFavorite = onToggleFavorite,
+                    onSharePost = { sharePost(post, context) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .wrapContentWidth(Alignment.End),
+                )
+            },
+        )
     }
 }
 
@@ -267,6 +285,7 @@ fun PostScreen(
  * @param bottomBarContent (UI) content to show for the bottom bar
  * @param lazyListState (state) the [LazyListState] for the post content
  * @param showTopAppBar (state) if the top app bar should be shown
+ * @param expandedTopBarContent (UI) content to show above the reading progress when there is no top app bar
  */
 @ExperimentalMaterial3Api
 @Composable
@@ -276,24 +295,63 @@ private fun PostScreenContent(
     bottomBarContent: @Composable () -> Unit = { },
     lazyListState: LazyListState = rememberLazyListState(),
     showTopAppBar: Boolean = true,
+    expandedTopBarContent: @Composable () -> Unit = { },
 ) {
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
+    val progress by remember(lazyListState) { derivedStateOf { lazyListState.readingProgress() } }
+    val minutesLeft by remember(lazyListState, post.metadata.readTimeMinutes) {
+        derivedStateOf { minutesLeft(post.metadata.readTimeMinutes, progress) }
+    }
+    val showBackToTop by remember(lazyListState) { derivedStateOf { lazyListState.isPastFirstScreen() } }
+    val coroutineScope = rememberCoroutineScope()
+    val layoutDirection = LocalLayoutDirection.current
     Scaffold(
         topBar = {
-            if (showTopAppBar) {
-                TopAppBar(
-                    title = post.publication?.name.orEmpty(),
-                    navigationIconContent = navigationIconContent,
-                    scrollBehavior = scrollBehavior,
+            // Opaque so the article doesn't show through the header as it scrolls under it
+            val headerModifier = Modifier.background(MaterialTheme.colorScheme.surface)
+            Column(
+                if (showTopAppBar) {
+                    headerModifier
+                } else {
+                    headerModifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                },
+            ) {
+                if (showTopAppBar) {
+                    TopAppBar(
+                        title = post.publication?.name.orEmpty(),
+                        navigationIconContent = navigationIconContent,
+                        scrollBehavior = scrollBehavior,
+                    )
+                } else {
+                    expandedTopBarContent()
+                }
+                ReadingProgress(
+                    progress = { progress },
+                    minutesLeft = minutesLeft,
                 )
             }
         },
         bottomBar = bottomBarContent,
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = showBackToTop,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut() + scaleOut(),
+            ) {
+                BackToTopButton(onClick = { coroutineScope.launch { lazyListState.animateScrollToItem(0) } })
+            }
+        },
     ) { innerPadding ->
         PostContent(
             post = post,
-            contentPadding = innerPadding,
+            // Extra bottom space so "Back to top" never covers the end of the article
+            contentPadding = PaddingValues(
+                start = innerPadding.calculateStartPadding(layoutDirection),
+                top = innerPadding.calculateTopPadding(),
+                end = innerPadding.calculateEndPadding(layoutDirection),
+                bottom = innerPadding.calculateBottomPadding() + BackToTopClearance,
+            ),
             modifier = if (showTopAppBar) {
                 Modifier
                     .nestedScroll(scrollBehavior.nestedScrollConnection)
@@ -428,5 +486,23 @@ fun PreviewPostNavRail() {
             (BlockingFakePostsRepository().getPost(post3.id) as Result.Success).data
         }
         PostScreen(post, true, {}, false, {})
+    }
+}
+
+@Preview("Post screen scrolled (reading progress)")
+@Composable
+private fun PreviewPostReadingProgress() {
+    JetnewsTheme {
+        val post = runBlocking {
+            (BlockingFakePostsRepository().getPost(post5.id) as Result.Success).data
+        }
+        PostScreen(
+            post = post,
+            isExpandedScreen = false,
+            onBack = {},
+            isFavorite = false,
+            onToggleFavorite = {},
+            lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = 12),
+        )
     }
 }
