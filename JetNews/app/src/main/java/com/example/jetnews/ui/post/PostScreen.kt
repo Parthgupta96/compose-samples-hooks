@@ -19,13 +19,23 @@ package com.example.jetnews.ui.post
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -41,8 +51,10 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -53,8 +65,11 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -79,6 +94,7 @@ import com.example.jetnews.data.Result
 import com.example.jetnews.data.posts.PostsRepository
 import com.example.jetnews.data.posts.impl.BlockingFakePostsRepository
 import com.example.jetnews.data.posts.impl.post3
+import com.example.jetnews.data.posts.impl.post5
 import com.example.jetnews.deeplink.util.DeepLinkPattern
 import com.example.jetnews.model.Post
 import com.example.jetnews.ui.home.HomeKey
@@ -89,9 +105,12 @@ import com.example.jetnews.ui.utils.BookmarkButton
 import com.example.jetnews.ui.utils.FavoriteButton
 import com.example.jetnews.ui.utils.ShareButton
 import com.example.jetnews.ui.utils.TextSettingsButton
+import com.example.jetnews.utils.recomposeHighlighter
+import kotlin.math.ceil
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 
@@ -252,6 +271,7 @@ fun PostScreen(
                 onSharePost = { sharePost(post, context) },
                 modifier = Modifier
                     .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(top = 8.dp)
                     .fillMaxWidth()
                     .wrapContentWidth(Alignment.End),
             )
@@ -279,17 +299,40 @@ private fun PostScreenContent(
 ) {
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
+    val scope = rememberCoroutineScope()
     Scaffold(
         topBar = {
             if (showTopAppBar) {
-                TopAppBar(
-                    title = post.publication?.name.orEmpty(),
-                    navigationIconContent = navigationIconContent,
-                    scrollBehavior = scrollBehavior,
+                Column {
+                    TopAppBar(
+                        title = post.publication?.name.orEmpty(),
+                        navigationIconContent = navigationIconContent,
+                        scrollBehavior = scrollBehavior,
+                    )
+                    ReadingProgress(lazyListState, post.metadata.readTimeMinutes)
+                }
+            } else {
+                ReadingProgress(
+                    lazyListState = lazyListState,
+                    readTimeMinutes = post.metadata.readTimeMinutes,
+                    modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
                 )
             }
         },
         bottomBar = bottomBarContent,
+        floatingActionButton = {
+            BackToTopButton(
+                lazyListState = lazyListState,
+                onClick = {
+                    scope.launch {
+                        topAppBarState.heightOffset = 0f
+                        // Glide most of the way, then let animateScrollToItem settle exactly at the top.
+                        lazyListState.animateScrollBy(-lazyListState.readingPosition().scrolledPx)
+                        lazyListState.animateScrollToItem(0)
+                    }
+                },
+            )
+        },
     ) { innerPadding ->
         PostContent(
             post = post,
@@ -299,6 +342,88 @@ private fun PostScreenContent(
                     .nestedScroll(scrollBehavior.nestedScrollConnection)
             } else Modifier,
             state = lazyListState,
+        )
+    }
+}
+
+private class ReadingPosition(val scrolledPx: Float, val progress: Float, val viewportPx: Int)
+
+/**
+ * Where the reader is in the article. Items above the viewport are not measured, so the scrolled
+ * distance is estimated from the average height of the visible items.
+ */
+// ponytail: average-height estimate; track measured item heights if the bar needs to be exact
+private fun LazyListState.readingPosition(): ReadingPosition {
+    val info = layoutInfo
+    val visible = info.visibleItemsInfo
+    val viewport = info.viewportEndOffset - info.viewportStartOffset
+    if (visible.isEmpty()) return ReadingPosition(0f, 0f, viewport)
+    val averageItemPx = visible.sumOf { it.size }.toFloat() / visible.size
+    val scrolled = firstVisibleItemIndex * averageItemPx + firstVisibleItemScrollOffset
+    val maxScroll = info.totalItemsCount * averageItemPx - viewport
+    val progress = when {
+        !canScrollForward -> 1f
+        maxScroll <= 0f -> 0f
+        else -> (scrolled / maxScroll).coerceIn(0f, 1f)
+    }
+    return ReadingPosition(scrolled, progress, viewport)
+}
+
+/** Whole minutes left to read, rounded up. 0 means the reader is at the end. */
+internal fun minutesLeft(readTimeMinutes: Int, progress: Float): Int = ceil(readTimeMinutes * (1f - progress)).toInt()
+
+/**
+ * Thin progress bar with an "N min left" label that follow the scroll position of [lazyListState].
+ */
+@Composable
+private fun ReadingProgress(lazyListState: LazyListState, readTimeMinutes: Int, modifier: Modifier = Modifier) {
+    // Only recomposes when the whole minute changes; the bar reads progress in the draw phase.
+    val minutes by remember(lazyListState, readTimeMinutes) {
+        derivedStateOf { minutesLeft(readTimeMinutes, lazyListState.readingPosition().progress) }
+    }
+    Column(
+        modifier
+            .recomposeHighlighter("ReadingProgress")
+            .background(MaterialTheme.colorScheme.surface)
+            .fillMaxWidth(),
+    ) {
+        LinearProgressIndicator(
+            progress = { lazyListState.readingPosition().progress },
+            modifier = Modifier.fillMaxWidth(),
+            drawStopIndicator = {},
+        )
+        Text(
+            text = if (minutes > 0) {
+                stringResource(R.string.post_min_left, minutes)
+            } else {
+                stringResource(R.string.post_finished)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .recomposeHighlighter("ReadingProgressLabel"),
+        )
+    }
+}
+
+/**
+ * "Back to top" button, shown once the reader has scrolled past the first screen of the article.
+ */
+@Composable
+private fun BackToTopButton(lazyListState: LazyListState, onClick: () -> Unit) {
+    val visible by remember(lazyListState) {
+        derivedStateOf { lazyListState.readingPosition().let { it.scrolledPx > it.viewportPx } }
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + scaleIn(),
+        exit = fadeOut() + scaleOut(),
+        modifier = Modifier.recomposeHighlighter("BackToTopButton"),
+    ) {
+        ExtendedFloatingActionButton(
+            onClick = onClick,
+            icon = { Icon(painterResource(R.drawable.ic_arrow_upward), contentDescription = null) },
+            text = { Text(stringResource(R.string.post_back_to_top)) },
         )
     }
 }
@@ -428,5 +553,16 @@ fun PreviewPostNavRail() {
             (BlockingFakePostsRepository().getPost(post3.id) as Result.Success).data
         }
         PostScreen(post, true, {}, false, {})
+    }
+}
+
+@Preview("Post screen (scrolled, reading progress)")
+@Composable
+private fun PreviewPostScrolled() {
+    JetnewsTheme {
+        val post = runBlocking {
+            (BlockingFakePostsRepository().getPost(post5.id) as Result.Success).data
+        }
+        PostScreen(post, false, {}, false, {}, lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = 6))
     }
 }

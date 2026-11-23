@@ -5,5 +5,17 @@
   "gesture_repeats": 5,
   "frame_runs": 1,
   "max_p95_ms": 40,
-  "screens": {}
+  "screens": {
+    "ReadingProgress": {
+      "deeplink": "https://developer.android.com/jetnews/posts/55db18283aca",
+      "max_recompositions": 4
+    },
+    "ReadingProgressLabel": {
+      "deeplink": "https://developer.android.com/jetnews/posts/55db18283aca",
+      "max_recompositions": 4
+    },
+    "BackToTopButton": {
+      "deeplink": "https://developer.android.com/jetnews/posts/55db18283aca"
+    }
+  }
 }
